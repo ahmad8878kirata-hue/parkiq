@@ -212,8 +212,8 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
 }
 
 // Build route segments for map display using OSRM real roads
-async function generateRealSegments(parkCoords, stationCoords, destCoords) {
-    const center = [48.7758, 9.1829];
+async function generateRealSegments(parkCoords, stationCoords, destCoords, startCoords) {
+    const center = startCoords || [48.7758, 9.1829];
 
     const [drivingResult, walkResult] = await Promise.all([
         fetchOSRMRoute(center, parkCoords, 'driving'),
@@ -236,7 +236,7 @@ app.get('/api/health', (req, res) => {
 
 app.post('/api/routes', async (req, res) => {
     try {
-        const { destination, arrivalTime, parkingId } = req.body;
+        const { destination, startCoords, arrivalTime, parkingId } = req.body;
 
         let liveParkings = await getParkingSites();
         if (!liveParkings.length) {
@@ -335,7 +335,7 @@ app.post('/api/routes', async (req, res) => {
             const variations = (parkingId && liveParkings.length === 1) ? baseVariations : [baseVariations[0]];
 
             // Compute real route segments once (shared across all variations)
-            const segments = await generateRealSegments(park.coordinates, stationCoords, destCoords);
+            const segments = await generateRealSegments(park.coordinates, stationCoords, destCoords, startCoords);
             const driveMinutes = segments[0]?.driveMinutes || 15;
 
             for (const v of variations) {

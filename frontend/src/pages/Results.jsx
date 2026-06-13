@@ -28,12 +28,24 @@ const Results = () => {
     const [isExpanded, setIsExpanded] = useState(true);
     const [showToast, setShowToast] = useState(false);
     
+    const touchStartY = useRef(0);
+    const handleTouchStart = (e) => { touchStartY.current = e.touches ? e.touches[0].clientY : e.clientY; };
+    const handleTouchMove = (e) => {
+        if (!isExpanded) return;
+        const currentY = e.touches ? e.touches[0].clientY : e.clientY;
+        if (currentY - touchStartY.current > 40) {
+            setIsExpanded(false);
+        }
+    };
+    
     const [routeOptions, setRouteOptions] = useState([]);
     const [selectedRoute, setSelectedRoute] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
     const destination = locationState.state?.destination || 'Stuttgart Zentrum';
+    const startLocation = locationState.state?.startLocation || 'Your Location';
+    const startCoords = locationState.state?.startCoords || [48.7758, 9.1829];
     const arrivalTime = locationState.state?.arrivalTime;
     const parkingId = locationState.state?.parkingId || null;
 
@@ -46,7 +58,7 @@ const Results = () => {
                 const res = await fetch(`${API_BASE}/api/routes`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ destination, arrivalTime, parkingId })
+                    body: JSON.stringify({ destination, startCoords, arrivalTime, parkingId })
                 });
                 if (!res.ok) throw new Error(`API error: ${res.status}`);
                 const json = await res.json();
@@ -70,14 +82,21 @@ const Results = () => {
             }
         };
         fetchRoutes();
-    }, [destination, arrivalTime, isRegistered]);
+    }, [destination, startCoords, arrivalTime, parkingId, isRegistered]);
 
     useEffect(() => {
         if (mapInstance.current || !mapRef.current || loading) return;
         
-        mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView([48.7758, 9.1829], 12);
+        mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView(startCoords, 12);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(mapInstance.current);
         setTimeout(() => mapInstance.current?.invalidateSize(), 200);
+
+        const startIcon = L.divIcon({
+            className: 'map-node start-node',
+            html: '📍',
+            iconSize: [30, 30]
+        });
+        L.marker(startCoords, { icon: startIcon }).addTo(mapInstance.current);
 
         routeOptions.forEach(opt => {
             const marker = L.marker([opt.lat, opt.lng], { 
@@ -162,6 +181,10 @@ const Results = () => {
         window.location.href = `mailto:service@parkiq.example.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     };
 
+    const handleStartNavigation = () => {
+        window.open(`https://www.google.com/maps/dir/?api=1&origin=${startCoords[0]},${startCoords[1]}&destination=${encodeURIComponent(destination)}&travelmode=transit`, '_blank');
+    };
+
     const renderIcon = (mode) => {
         if (mode === 'driving') return <Car weight="fill" />;
         if (mode === 'parking') return <span style={{fontWeight:'bold'}}>P</span>;
@@ -191,14 +214,24 @@ const Results = () => {
                 <>
                     <div ref={mapRef} className="main-map" />
                     
-                    <div className="top-nav map-top-nav">
-                        <button className="icon-btn bg-white shadow-sm" onClick={() => navigate('/home')}><ArrowLeft weight="bold" /></button>
+                    <div className="top-nav map-top-nav" style={{display: 'flex', justifyContent: 'space-between', width: '100%'}}>
+                        <button className="icon-btn bg-white shadow-sm" onClick={() => navigate(-1)}><ArrowLeft weight="bold" /></button>
                         <div className="destination-pill bg-white shadow-sm"><MapPin weight="fill" className="text-primary" /><span>{destination}</span></div>
-                        <div className="type-badge bg-white shadow-sm">{parkingType === 'kurz' ? 'Short-term' : 'Permanent'}</div>
+                        <button className="icon-btn bg-white shadow-sm" onClick={() => navigate('/home')}><ArrowLeft weight="bold" style={{transform: 'rotate(180deg)'}} /></button>
                     </div>
 
                     <div className={`bottom-sheet ${isExpanded ? 'expanded' : ''}`}>
-                        <div className="drag-handle-container" onClick={() => setIsExpanded(!isExpanded)}><div className="drag-handle"></div></div>
+                        <div 
+                            className="drag-handle-container" 
+                            onClick={() => setIsExpanded(!isExpanded)}
+                            onTouchStart={handleTouchStart}
+                            onTouchMove={handleTouchMove}
+                            onMouseDown={handleTouchStart}
+                            onMouseMove={(e) => { if (e.buttons === 1) handleTouchMove(e); }}
+                            style={{ cursor: 'grab', padding: '12px 0', width: '100%', display: 'flex', justifyContent: 'center' }}
+                        >
+                            <div className="drag-handle" style={{ background: '#94a3b8', width: '48px', height: '5px', borderRadius: '4px' }}></div>
+                        </div>
                         <div className="sheet-scrollable">
                             {!selectedRoute ? (
                                 <div className="options-list">
@@ -264,12 +297,19 @@ const Results = () => {
                                             <div className="timeline-item" key={i}>
                                                 <div className="time">{leg.time}</div>
                                                 <div className="node-col"><div className={`node ${leg.mode}`}>{renderIcon(leg.mode)}</div>{i !== selectedRoute.timeline.length - 1 && <div className="line"></div>}</div>
-                                                <div className="details"><div className="title font-bold">{leg.name}</div><div className="subtitle text-sm text-muted">{leg.details}</div></div>
+                                                <div className="details">
+                                                    <div className="title font-bold">
+                                                        {leg.name === 'Current Location' ? startLocation : 
+                                                         leg.name === 'Station' ? 'Stuttgart Hauptbahnhof' : 
+                                                         leg.name}
+                                                    </div>
+                                                    <div className="subtitle text-sm text-muted">{leg.details}</div>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
                                     {parkingType === 'dauer' && <button className="btn btn-outline w-100 mt-6 mb-2" onClick={() => handleEmailReservation(selectedRoute.parkingName)}>Request Reservation</button>}
-                                    <button className="btn btn-primary btn-large w-100 mb-4 shadow-glow">Start Navigation</button>
+                                    <button className="btn btn-primary btn-large w-100 mb-4 shadow-glow" onClick={handleStartNavigation}>Start Navigation</button>
                                 </div>
                             )}
                         </div>

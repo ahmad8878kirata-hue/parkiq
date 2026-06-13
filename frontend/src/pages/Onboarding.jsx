@@ -9,6 +9,24 @@ const Onboarding = () => {
     const navigate = useNavigate();
     const { setLocationEnabled } = useParking();
     
+    const handleEnableLocation = () => {
+        if ("geolocation" in navigator) {
+            navigator.geolocation.getCurrentPosition(
+                () => {
+                    setLocationEnabled(true);
+                    navigate('/selection');
+                },
+                () => {
+                    setLocationEnabled(false);
+                    navigate('/selection');
+                }
+            );
+        } else {
+            setLocationEnabled(false);
+            navigate('/selection');
+        }
+    };
+
     const slides = [
         {
             id: 'splash',
@@ -101,7 +119,7 @@ const Onboarding = () => {
                    </div>
                    <h2 className="slide-title">Use Your Current Location</h2>
                    <p className="slide-desc">To show you the best parking spots and calculate the fastest route, ParkIQ needs to know where you are.</p>
-                    <button className="btn btn-primary btn-large btn-glow" onClick={() => { setLocationEnabled(true); navigate('/selection'); }} style={{marginTop: '2rem'}}>Enable Location</button>
+                    <button className="btn btn-primary btn-large btn-glow" onClick={handleEnableLocation} style={{marginTop: '2rem'}}>Enable Location</button>
                     <button className="btn btn-text" onClick={() => { setLocationEnabled(false); navigate('/selection'); }} style={{marginTop: '1rem'}}>Not now</button>
                </div>
             )

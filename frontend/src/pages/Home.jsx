@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useParking } from '../context/ParkingContext';
-import { List, Car, CaretRight, House, Briefcase, Barbell, FirstAid, MagnifyingGlass, Microphone, X, MapPin, NavigationArrow, ChargingStation } from '@phosphor-icons/react';
+import { List, Car, CaretRight, House, Briefcase, Barbell, FirstAid, MagnifyingGlass, Microphone, X, MapPin, NavigationArrow, ChargingStation, DotsThreeVertical, Pencil } from '@phosphor-icons/react';
 import L from 'leaflet';
 import './Home.css';
 
@@ -14,11 +14,20 @@ const Home = () => {
     const mapInstance = useRef(null);
     const markerInstance = useRef(null);
     const parkingMarkersRef = useRef([]);
+    const tileLayerRef = useRef(null);
     const [locationStatus, setLocationStatus] = useState('');
     const [parkingLots, setParkingLots] = useState([]);
     const [loadingParking, setLoadingParking] = useState(true);
     const [selectedParking, setSelectedParking] = useState(null);
     const [sheetExpanded, setSheetExpanded] = useState(false);
+    const [settingsOpen, setSettingsOpen] = useState(false);
+    const [darkMode, setDarkMode] = useState(false);
+    const [editingLocation, setEditingLocation] = useState(false);
+    const isPickingLocationRef = useRef(false);
+    const [startCoords, setStartCoords] = useState([48.7758, 9.1829]);
+    const [customLocation, setCustomLocation] = useState('');
+    const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
+    const [profileModalOpen, setProfileModalOpen] = useState(false);
 
     const handleSelectParking = (lot) => {
         setSelectedParking(lot);
@@ -26,34 +35,47 @@ const Home = () => {
         mapInstance.current?.setView(lot.coordinates, 15, { animate: true });
     };
 
-    const updateParkingMarkers = useCallback(() => {
-        const map = mapInstance.current;
-        if (!map || loadingParking) return;
+    const handleLocationSubmit = async () => {
+        setEditingLocation(false);
+        if (!customLocation) return;
+        
+        try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(customLocation)}`);
+            const data = await res.json();
+            if (data && data.length > 0) {
+                const lat = parseFloat(data[0].lat);
+                const lon = parseFloat(data[0].lon);
+                mapInstance.current?.setView([lat, lon], 14, { animate: true });
+                markerInstance.current?.setLatLng([lat, lon]);
+                setLocationStatus(data[0].display_name.split(',')[0]);
+            } else {
+                alert("Location not found");
+            }
+        } catch (e) {
+            console.error('Failed to geocode location:', e);
+        }
+    };
 
-        parkingMarkersRef.current.forEach(m => m.remove());
+    const updateParkingMarkers = useCallback(() => {
+        if (!mapInstance.current) return;
+        
+        // Remove existing markers
+        parkingMarkersRef.current.forEach(marker => marker.remove());
         parkingMarkersRef.current = [];
 
         parkingLots.forEach(lot => {
-            const statusColor = '#22c55e';
             const marker = L.marker(lot.coordinates, {
                 icon: L.divIcon({
-                    className: 'parking-div-icon',
-                    html: `
-                        <div class="parking-marker">
-                            <div class="marker-dot" style="background:${statusColor}"></div>
-                            <div class="marker-pulse" style="background:${statusColor}"></div>
-                            <span class="marker-text">P</span>
-                        </div>
-                    `,
-                    iconSize: [36, 36],
-                    iconAnchor: [18, 18]
+                    className: 'map-node parking-node public',
+                    html: '<div style="font-weight:bold;background:#3b82f6;color:white;width:100%;height:100%;display:flex;align-items:center;justify-content:center;border-radius:50%;border:2px solid white;box-shadow:0 2px 5px rgba(0,0,0,0.3);">P</div>',
+                    iconSize: [28, 28]
                 })
-            }).addTo(map);
-
+            }).addTo(mapInstance.current);
+            
             marker.on('click', () => handleSelectParking(lot));
             parkingMarkersRef.current.push(marker);
         });
-    }, [parkingLots, loadingParking]);
+    }, [parkingLots]);
 
     // Fetch live parking data
     useEffect(() => {
@@ -74,39 +96,76 @@ const Home = () => {
         return () => clearInterval(interval);
     }, []);
 
-    // Init map once + re-fit when parking markers are added
     useEffect(() => {
         if (!mapRef.current || mapInstance.current) return;
 
+        const initMap = (centerLatLng, zoom) => {
+            mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView(centerLatLng, zoom);
+            tileLayerRef.current = L.tileLayer(
+                document.body.classList.contains('dark-mode') 
+                    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' 
+                    : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', 
+                { maxZoom: 19 }
+            ).addTo(mapInstance.current);
+
+            // Force size recalculation after mount
+            setTimeout(() => mapInstance.current?.invalidateSize(), 200);
+
+            const myIcon = L.divIcon({
+                className: 'custom-div-icon',
+                html: `<div style="background:#3b82f6;width:20px;height:20px;border-radius:50%;border:3px solid white;box-shadow:0 0 10px rgba(0,0,0,0.3);"></div>`,
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            });
+            markerInstance.current = L.marker(centerLatLng, { icon: myIcon }).addTo(mapInstance.current);
+
+            mapInstance.current.on('click', async (e) => {
+                if (!isPickingLocationRef.current) return;
+                const { lat, lng } = e.latlng;
+                
+                setStartCoords([lat, lng]);
+                markerInstance.current?.setLatLng([lat, lng]);
+                mapInstance.current?.setView([lat, lng], 14, { animate: true });
+                
+                setEditingLocation(false);
+                isPickingLocationRef.current = false;
+                setLocationStatus('Loading location...');
+
+                try {
+                    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+                    const data = await res.json();
+                    if (data && data.display_name) {
+                        const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];
+                        setLocationStatus(name);
+                    } else {
+                        setLocationStatus('Custom Location');
+                    }
+                } catch (err) {
+                    console.error('Reverse geocode failed:', err);
+                    setLocationStatus('Custom Location');
+                }
+            });
+        };
+
         const stuttgartCenter = [48.7758, 9.1829];
-        mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView(stuttgartCenter, 13);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-            maxZoom: 19
-        }).addTo(mapInstance.current);
-
-        // Force size recalculation after mount
-        setTimeout(() => mapInstance.current?.invalidateSize(), 200);
-
-        const myIcon = L.divIcon({
-            className: 'custom-div-icon',
-            html: `<div style="background:#3b82f6;width:20px;height:20px;border-radius:50%;border:3px solid white;box-shadow:0 0 10px rgba(0,0,0,0.3);"></div>`,
-            iconSize: [20, 20],
-            iconAnchor: [10, 10]
-        });
-        markerInstance.current = L.marker(stuttgartCenter, { icon: myIcon }).addTo(mapInstance.current);
 
         if (locationEnabled && "geolocation" in navigator) {
             setLocationStatus('Locating...');
             navigator.geolocation.getCurrentPosition(
                 (pos) => {
                     const ll = [pos.coords.latitude, pos.coords.longitude];
-                    mapInstance.current?.setView(ll, 14);
-                    markerInstance.current?.setLatLng(ll);
+                    initMap(ll, 14);
                     setLocationStatus('');
+                    setStartCoords(ll);
                 },
-                () => setLocationStatus('Location access denied'),
+                () => {
+                    initMap(stuttgartCenter, 13);
+                    setLocationStatus('Location access denied');
+                },
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
+        } else {
+            initMap(stuttgartCenter, 13);
         }
 
         return () => {
@@ -120,47 +179,104 @@ const Home = () => {
         updateParkingMarkers();
     }, [updateParkingMarkers]);
 
+    // Update map tiles when dark mode changes
+    useEffect(() => {
+        if (tileLayerRef.current) {
+            const url = darkMode 
+                ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' 
+                : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+            tileLayerRef.current.setUrl(url);
+        }
+    }, [darkMode]);
+
+    const touchStartY = useRef(0);
+    const handleTouchStart = (e) => { touchStartY.current = e.touches ? e.touches[0].clientY : e.clientY; };
+    const handleTouchMove = (e) => {
+        if (!sheetExpanded) return;
+        const currentY = e.touches ? e.touches[0].clientY : e.clientY;
+        if (currentY - touchStartY.current > 40) {
+            setSheetExpanded(false);
+            setTimeout(() => setSelectedParking(null), 300);
+        }
+    };
+
     return (
         <div className="view">
             <div ref={mapRef} className="background-map" />
             <div className="map-overlay" />
             
             <div className="top-nav glass-panel">
-                <button className="icon-btn" onClick={() => navigate('/selection')}><List weight="bold" /></button>
+                <div style={{position: 'relative'}}>
+                    <button className="icon-btn" onClick={() => setSettingsOpen(!settingsOpen)}>
+                        <DotsThreeVertical weight="bold" size={24} />
+                    </button>
+                    {settingsOpen && (
+                        <div className="settings-dropdown" style={{position: 'absolute', top: '100%', left: 0, background: 'var(--surface)', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', padding: '0.5rem', zIndex: 100, minWidth: '200px'}}>
+                            <div className="dropdown-item" onClick={() => { 
+                                const newDark = !darkMode;
+                                setDarkMode(newDark); 
+                                if (newDark) document.body.classList.add('dark-mode');
+                                else document.body.classList.remove('dark-mode');
+                                setSettingsOpen(false); 
+                            }}>
+                                {darkMode ? '☀️ Light Mode' : '🌙 Dark Mode'}
+                            </div>
+                            <div className="dropdown-item" onClick={() => { setPrivacyModalOpen(true); setSettingsOpen(false); }}>
+                                🔒 Privacy Settings
+                            </div>
+                            <div className="dropdown-item" onClick={() => { setProfileModalOpen(true); setSettingsOpen(false); }}>
+                                👤 User Profile Options
+                            </div>
+                        </div>
+                    )}
+                </div>
                 <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center'}}>
                     <div style={{fontWeight: 700, color: 'var(--primary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px'}}>
                         {parkingType === 'kurz' ? 'Short-term' : 'Permanent'}
                     </div>
-                    <div style={{fontWeight: 600, color: 'var(--text-main)', fontSize: '0.875rem'}}>{locationStatus || 'Stuttgart'}</div>
+                    {editingLocation ? (
+                        <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--primary)', color: 'white', padding: '0.4rem 1rem', borderRadius: '2rem', fontSize: '0.875rem', fontWeight: 'bold', boxShadow: '0 4px 10px rgba(244, 63, 94, 0.3)'}}>
+                            Tap anywhere on map
+                            <button onClick={() => { setEditingLocation(false); isPickingLocationRef.current = false; }} style={{background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', cursor: 'pointer', marginLeft: '0.5rem', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center'}}><X weight="bold" /></button>
+                        </div>
+                    ) : (
+                        <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem'}}>
+                            <div style={{fontWeight: 600, color: 'var(--text-main)', fontSize: '0.9rem'}}>
+                                {locationStatus || 'Stuttgart'}
+                            </div>
+                            <button 
+                                onClick={() => { setEditingLocation(true); isPickingLocationRef.current = true; }}
+                                style={{display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--surface)', border: '1px solid var(--border-color)', color: 'var(--primary)', padding: '0.3rem 0.75rem', borderRadius: '1rem', fontSize: '0.75rem', fontWeight: '600', cursor: 'pointer', boxShadow: 'var(--shadow-sm)'}}
+                            >
+                                <Pencil weight="bold" /> Change My Location
+                            </button>
+                        </div>
+                    )}
                 </div>
                 <div style={{width: '40px'}}></div>
             </div>
 
-            {/* Live Parking Mini Dashboard */}
-            <div className="parking-dashboard">
-                <div className="dashboard-header">
-                    <Car weight="fill" className="dashboard-icon" />
-                    <span>PBW Parking Stuttgart</span>
-                    {loadingParking && <span className="loading-dots">Loading...</span>}
-                    {!loadingParking && <span className="loading-dots" style={{color:'var(--text-light)'}}>{parkingLots.length} lots</span>}
-                </div>
-                <div className="dashboard-list">
-                    {parkingLots.slice(0, 3).map(lot => (
-                        <div key={lot.id} className="dashboard-item" onClick={() => handleSelectParking(lot)} style={{cursor:'pointer'}}>
-                            <div className="d-status"></div>
-                            <div className="d-name">{lot.name}</div>
-                            <div className="d-count">{lot.totalCapacity} spots</div>
-                        </div>
-                    ))}
-                </div>
+            <div className="top-park-btn-container" style={{position: 'absolute', top: '5rem', right: '1rem', zIndex: 20}}>
+                <button className="btn btn-primary shadow-glow" onClick={() => navigate('/search', { state: { currentLocation: locationStatus || 'Stuttgart', startCoords } })} style={{padding: '0.6rem 1.2rem', borderRadius: '1.5rem 1.5rem 1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.875rem', fontWeight: '600'}}>
+                    <span>Park & Ride</span>
+                    <CaretRight weight="bold" />
+                </button>
             </div>
 
             {/* Parking Detail Bottom Sheet */}
             {selectedParking && (
                 <div className={`parking-sheet-overlay ${sheetExpanded ? 'visible' : ''}`} onClick={() => setSheetExpanded(false)}>
                     <div className={`parking-sheet ${sheetExpanded ? 'expanded' : ''}`} onClick={e => e.stopPropagation()}>
-                        <div className="parking-sheet-handle" onClick={() => setSheetExpanded(false)}>
-                            <div className="sheet-handle-bar"></div>
+                        <div 
+                            className="parking-sheet-handle" 
+                            onClick={() => setSheetExpanded(false)}
+                            onTouchStart={handleTouchStart}
+                            onTouchMove={handleTouchMove}
+                            onMouseDown={handleTouchStart}
+                            onMouseMove={(e) => { if (e.buttons === 1) handleTouchMove(e); }}
+                            style={{ cursor: 'grab', padding: '12px 0', width: '100%', display: 'flex', justifyContent: 'center' }}
+                        >
+                            <div className="sheet-handle-bar" style={{ background: '#94a3b8', width: '48px', height: '5px', borderRadius: '4px' }}></div>
                         </div>
                         <div className="parking-sheet-content">
                             <div className="parking-sheet-header">
@@ -187,7 +303,7 @@ const Home = () => {
                                     </div>
                                 )}
                             </div>
-                            <button className="btn btn-primary w-100 mt-2" onClick={() => navigate('/search', { state: { selectedParking } })}>
+                            <button className="btn btn-primary w-100 mt-2" onClick={() => navigate('/search', { state: { selectedParking, currentLocation: locationStatus || 'Stuttgart', startCoords } })}>
                                 <NavigationArrow weight="bold" className="mr-2" /> Route from here
                             </button>
                         </div>
@@ -196,25 +312,63 @@ const Home = () => {
             )}
             
             <div className="bottom-controls">
-                <button className="btn btn-primary btn-large w-100 shadow-glow mb-4" onClick={() => navigate('/search')}>
-                    <span className="flex-align-center"><Car weight="bold" className="mr-2" /> Park & Ride</span>
-                    <CaretRight weight="bold" />
-                </button>
-                
-                <div className="shortcuts">
-                    <button className="shortcut-btn"><House weight="fill" className="text-blue" /> Home</button>
-                    <button className="shortcut-btn"><Briefcase weight="fill" className="text-blue" /> Office</button>
-                    <button className="shortcut-btn"><Barbell weight="fill" className="text-blue" /> Fitness</button>
-                    <button className="shortcut-btn"><FirstAid weight="fill" className="text-blue" /> Hospital</button>
-                </div>
-                
-                <div className="search-container" onClick={() => navigate('/search')}>
+                <div className="search-container" onClick={() => navigate('/search', { state: { currentLocation: locationStatus || 'Stuttgart', startCoords } })}>
                     <MagnifyingGlass weight="bold" className="search-icon" />
                     <div className="search-text">Where are you going?</div>
                     <button className="mic-btn"><Microphone weight="bold" /></button>
-                    <div className="date-badge">Date</div>
                 </div>
             </div>
+
+            {/* Privacy Modal */}
+            {privacyModalOpen && (
+                <div className="parking-sheet-overlay visible" onClick={() => setPrivacyModalOpen(false)}>
+                    <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{padding: '2rem', height: 'auto', bottom: 0}}>
+                        <h3 style={{marginBottom: '0.5rem'}}>Privacy Settings</h3>
+                        <p style={{color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.875rem'}}>Manage your data permissions and tracking preferences.</p>
+                        
+                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0', borderBottom: '1px solid var(--border-color)'}}>
+                            <div>
+                                <h4 style={{margin: '0 0 0.25rem 0'}}>Location Access</h4>
+                                <span style={{fontSize: '0.75rem', color: 'var(--text-muted)'}}>Required for routing and nearby parking</span>
+                            </div>
+                            <input type="checkbox" checked={locationEnabled} readOnly style={{transform: 'scale(1.2)'}} />
+                        </div>
+                        
+                        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0', borderBottom: '1px solid var(--border-color)'}}>
+                            <div>
+                                <h4 style={{margin: '0 0 0.25rem 0'}}>Analytics & Usage</h4>
+                                <span style={{fontSize: '0.75rem', color: 'var(--text-muted)'}}>Help us improve the ParkIQ experience</span>
+                            </div>
+                            <input type="checkbox" defaultChecked style={{transform: 'scale(1.2)'}} />
+                        </div>
+
+                        <button className="btn btn-primary w-100" style={{marginTop: '2rem'}} onClick={() => setPrivacyModalOpen(false)}>Save Preferences</button>
+                    </div>
+                </div>
+            )}
+
+            {/* Profile Modal */}
+            {profileModalOpen && (
+                <div className="parking-sheet-overlay visible" onClick={() => setProfileModalOpen(false)}>
+                    <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{padding: '2rem', height: 'auto', bottom: 0}}>
+                        <h3 style={{marginBottom: '0.5rem'}}>User Category</h3>
+                        <p style={{color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.875rem'}}>Select your profile type to apply relevant discounts and rules.</p>
+                        
+                        <div style={{display: 'flex', flexDirection: 'column', gap: '0.75rem'}}>
+                            <button className={`btn ${parkingType === 'kurz' ? 'btn-primary' : 'btn-outline'} w-100`} onClick={() => { setProfileModalOpen(false); navigate('/selection'); }}>
+                                Regular Customer
+                            </button>
+                            <button className={`btn btn-outline w-100`} onClick={() => { setProfileModalOpen(false); navigate('/selection'); }}>
+                                🎓 Student / University (Discounted)
+                            </button>
+                            <button className={`btn ${parkingType === 'dauer' ? 'btn-primary' : 'btn-outline'} w-100`} onClick={() => { setProfileModalOpen(false); navigate('/selection'); }}>
+                                Permanent Parker
+                            </button>
+                        </div>
+                        <button className="btn btn-text w-100" style={{marginTop: '1rem'}} onClick={() => setProfileModalOpen(false)}>Cancel</button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
