@@ -16,14 +16,42 @@ const Search = () => {
     const [time, setTime] = useState('08:30');
     const [showDate, setShowDate] = useState(false);
 
-    const handleAccept = () => {
+    const [loadingLocation, setLoadingLocation] = useState(false);
+
+    const handleAccept = async () => {
+        setLoadingLocation(true);
+        let finalStartCoords = startCoords;
+        let finalDestName = destination;
+        let finalStartName = startLocation;
+
+        try {
+            // Find closest match for destination
+            const destRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(destination)}&limit=1`);
+            const destData = await destRes.json();
+            if (destData.features && destData.features.length > 0) {
+                finalDestName = destData.features[0].properties.name || destination;
+            }
+
+            // Find closest match for start location
+            if (startLocation && startLocation !== 'Stuttgart' && startLocation !== 'Your Location') {
+                const startRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(startLocation)}&limit=1`);
+                const startData = await startRes.json();
+                if (startData.features && startData.features.length > 0) {
+                    finalStartCoords = [startData.features[0].geometry.coordinates[1], startData.features[0].geometry.coordinates[0]];
+                    finalStartName = startData.features[0].properties.name || startLocation;
+                }
+            }
+        } catch (e) {
+            console.error("Geocoding failed:", e);
+        }
+
         const dateStr = `2026-04-${activeDay.toString().padStart(2, '0')}T${time}:00`;
         const arrivalTime = new Date(dateStr).toISOString();
         navigate('/results', {
             state: {
-                destination,
-                startLocation,
-                startCoords,
+                destination: finalDestName,
+                startLocation: finalStartName,
+                startCoords: finalStartCoords,
                 arrivalTime,
                 parkingId: selectedParking?.id
             }
@@ -147,8 +175,9 @@ const Search = () => {
                 <button 
                     className="btn btn-primary btn-large w-100" 
                     onClick={handleAccept}
+                    disabled={loadingLocation}
                 >
-                    Find Best PBW Route
+                    {loadingLocation ? 'Finding Best Match...' : 'Find Best PBW Route'}
                 </button>
             </div>
         </div>

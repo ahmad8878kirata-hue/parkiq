@@ -6,11 +6,21 @@ import './Onboarding.css';
 
 const Onboarding = () => {
     const [currentSlide, setCurrentSlide] = useState(0);
+    const [showLocationModal, setShowLocationModal] = useState(false);
     const navigate = useNavigate();
     const { setLocationEnabled } = useParking();
     
     const handleEnableLocation = () => {
-        if ("geolocation" in navigator) {
+        const existingChoice = localStorage.getItem('locationPermissionChoice');
+        if (existingChoice) {
+            proceedWithLocation(existingChoice !== 'this_time' && existingChoice !== 'dont_allow');
+        } else {
+            setShowLocationModal(true);
+        }
+    };
+
+    const proceedWithLocation = (shouldEnable) => {
+        if (shouldEnable && "geolocation" in navigator) {
             navigator.geolocation.getCurrentPosition(
                 () => {
                     setLocationEnabled(true);
@@ -26,6 +36,15 @@ const Onboarding = () => {
             navigate('/selection');
         }
     };
+
+    const handlePermissionChoice = (choice) => {
+        if (choice !== 'this_time') {
+            localStorage.setItem('locationPermissionChoice', choice);
+        }
+        setShowLocationModal(false);
+        proceedWithLocation(choice !== 'dont_allow');
+    };
+
 
     const slides = [
         {
@@ -161,6 +180,33 @@ const Onboarding = () => {
                     <button className="icon-btn btn-next" onClick={() => setCurrentSlide(c => c + 1)}>
                         <ArrowRight weight="bold" />
                     </button>
+                </div>
+            )}
+
+            {showLocationModal && (
+                <div className="parking-sheet-overlay visible" onClick={() => setShowLocationModal(false)} style={{zIndex: 100, background: 'rgba(0,0,0,0.5)'}}>
+                    <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{padding: '2rem', height: 'auto', bottom: 0}}>
+                        <div style={{display: 'flex', justifyContent: 'center', marginBottom: '1rem'}}>
+                            <div style={{background: 'var(--primary)', color: 'white', width: '48px', height: '48px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                                <MapPin weight="fill" size={24} />
+                            </div>
+                        </div>
+                        <h3 style={{textAlign: 'center', marginBottom: '0.5rem', color: 'var(--text-main)'}}>Allow ParkIQ to access this device's location?</h3>
+                        <div style={{display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1.5rem'}}>
+                            <button className="btn w-100" style={{background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', justifyContent: 'flex-start', padding: '1rem'}} onClick={() => handlePermissionChoice('all_time')}>
+                                Allow all the time
+                            </button>
+                            <button className="btn w-100" style={{background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', justifyContent: 'flex-start', padding: '1rem'}} onClick={() => handlePermissionChoice('while_using')}>
+                                Allow while using the app
+                            </button>
+                            <button className="btn w-100" style={{background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', justifyContent: 'flex-start', padding: '1rem'}} onClick={() => handlePermissionChoice('this_time')}>
+                                Allow this time
+                            </button>
+                            <button className="btn w-100" style={{background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', justifyContent: 'flex-start', padding: '1rem'}} onClick={() => handlePermissionChoice('dont_allow')}>
+                                Don't allow
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

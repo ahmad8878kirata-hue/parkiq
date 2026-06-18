@@ -40,18 +40,13 @@ function transformSite(site) {
 
 async function fetchAndCacheParking() {
   const response = await axios.get(MOBIDATA_PARK_API, {
-    params: { source_uid: 'pbw' },
     headers: { 'Accept': 'application/json' }
   });
   const items = response.data?.items || [];
   const processed = items
     .filter(s => s.purpose === 'CAR')
-    .map(transformSite)
-    .filter(s => {
-      const [lat, lon] = s.coordinates;
-      return lat >= STUTTGART_BBOX.minLat && lat <= STUTTGART_BBOX.maxLat &&
-             lon >= STUTTGART_BBOX.minLon && lon <= STUTTGART_BBOX.maxLon;
-    });
+    .map(transformSite);
+    
   parkingCache.data = processed;
   parkingCache.lastUpdated = Date.now();
   return processed;

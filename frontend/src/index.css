@@ -216,7 +216,13 @@ body.dark-mode .search-container {
     border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-body.dark-mode input[type="text"] {
-    background: #2d2d2d;
-    color: #f8fafc;
+body.dark-mode input[type="text"],
+body.dark-mode input {
+    background: #2d2d2d !important;
+    color: #f8fafc !important;
+    border-color: #444 !important;
+}
+
+body.dark-mode img[alt="Welcome"] {
+    filter: invert(1) hue-rotate(180deg);
 }

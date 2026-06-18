@@ -236,8 +236,8 @@ const Results = () => {
                             {!selectedRoute ? (
                                 <div className="options-list">
                                     <h4 className="text-muted text-sm font-semibold mb-3">SMART PBW OPTIONS</h4>
-                                    {routeOptions.map((opt) => (
-                                        <div key={opt.id} className={`option-card ${opt.hasSpecialRate ? 'special-card' : ''}`} onClick={() => setSelectedRoute(opt)}>
+                                    {routeOptions.map((opt, idx) => (
+                                        <div key={`${opt.id}-${opt.variantLabel || idx}`} className={`option-card ${opt.hasSpecialRate ? 'special-card' : ''}`} onClick={() => setSelectedRoute(opt)}>
                                             <div className="flex-between mb-2">
                                                 <div className="font-bold">{opt.parkingName}{opt.variantLabel && <span className="variant-tag">{opt.variantLabel}</span>}<span className={`category-tag ${opt.category.toLowerCase()}`}>{opt.category}</span></div>
                                                     <div className="price-container">
