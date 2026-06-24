@@ -17,8 +17,6 @@ const Search = () => {
     const [activeDay, setActiveDay] = useState(28);
     const [time, setTime] = useState('08:30');
     const [showDate, setShowDate] = useState(false);
-    const [transportMode, setTransportMode] = useState('transit');
-    const [maxTimeMinutes, setMaxTimeMinutes] = useState(120);
 
     const [loadingLocation, setLoadingLocation] = useState(false);
 
@@ -62,9 +60,7 @@ const Search = () => {
                 startCoords: finalStartCoords,
                 destCoords: finalDestCoords,
                 arrivalTime,
-                parkingId: selectedParking?.id,
-                transportMode,
-                maxTimeMinutes
+                parkingId: selectedParking?.id
             }
         });
     };
@@ -125,25 +121,6 @@ const Search = () => {
                         style={{width: '100%', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1.5px solid var(--primary-light)', outline: 'none', fontFamily: 'var(--font-body)', fontSize: '1rem', background: 'var(--surface)', color: 'var(--text-main)', boxShadow: '0 4px 12px rgba(244, 63, 94, 0.1)', marginBottom: '1rem'}}
                     />
 
-                    <label style={{display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: '600'}}>Transport Mode</label>
-                    <select 
-                        value={transportMode} 
-                        onChange={(e) => setTransportMode(e.target.value)}
-                        style={{width: '100%', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1.5px solid var(--border-color)', outline: 'none', background: 'var(--surface)', color: 'var(--text-main)', marginBottom: '1rem'}}
-                    >
-                        <option value="transit">Public Transit</option>
-                        <option value="bicycle">Bicycle</option>
-                        <option value="walking">Walking</option>
-                    </select>
-
-                    <label style={{display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: '600'}}>Max Travel Time ({maxTimeMinutes} min)</label>
-                    <input 
-                        type="range" 
-                        min="10" max="240" step="10"
-                        value={maxTimeMinutes} 
-                        onChange={(e) => setMaxTimeMinutes(parseInt(e.target.value))}
-                        style={{width: '100%', marginBottom: '1rem'}}
-                    />
                 </div>
                 
                 {!showDate ? (
