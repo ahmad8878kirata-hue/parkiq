@@ -500,13 +500,18 @@ app.post('/api/routes', async (req, res) => {
         const allOptions = [];
         const allStops = await fetchAndCacheTransitStops();
 
+        // Find nearest stops to destination for each transport mode
+        const destNearTrain = findNearestTransitStop(destCoords, allStops, ['train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn']);
+        const destNearBus = findNearestTransitStop(destCoords, allStops, ['bus']);
+        const destNearBike = findNearestTransitStop(destCoords, allStops, ['bike', 'bicycle', 'cycling']);
+
         for (const park of liveParkings) {
             const parkingPrice = estimateParkingPrice(park.name);
             const totalCost = parseFloat(parkingPrice.toFixed(2));
             const savings = Math.max(0, DIRECT_CITY_PARKING_COST - totalCost);
             const driveMinutes = Math.max(1, Math.round(distanceMeters(startCoords || [48.7758, 9.1829], park.coordinates) / 200));
 
-            // Find nearest stops of each type for display
+            // Find nearest stops of each type to the parking
             const nearTrain = findNearestTransitStop(park.coordinates, allStops, ['train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn']);
             const nearBus = findNearestTransitStop(park.coordinates, allStops, ['bus']);
             const nearBike = findNearestTransitStop(park.coordinates, allStops, ['bike', 'bicycle', 'cycling']);
@@ -516,6 +521,17 @@ app.post('/api/routes', async (req, res) => {
                 nearBus?.distance || Infinity,
                 nearBike?.distance || Infinity
             );
+
+            // Calculate total walking for each mode (park→stop + stop→dest)
+            const trainTotalWalk = (nearTrain?.distance || 9999) + (destNearTrain?.distance || 9999);
+            const busTotalWalk = (nearBus?.distance || 9999) + (destNearBus?.distance || 9999);
+            const bikeTotalWalk = (nearBike?.distance || 9999) + (destNearBike?.distance || 9999);
+            const bestTotalWalk = Math.min(trainTotalWalk, busTotalWalk, bikeTotalWalk);
+
+            // Determine which mode gives the shortest walk
+            let bestMode = 'train';
+            if (bestTotalWalk === busTotalWalk) bestMode = 'bus';
+            if (bestTotalWalk === bikeTotalWalk) bestMode = 'bicycle';
 
             const hasTrain = nearTrain && nearTrain.distance < 1000;
             const hasBus = nearBus && nearBus.distance < 1000;
@@ -530,21 +546,24 @@ app.post('/api/routes', async (req, res) => {
                 travelDuration: '30 min',
                 walkTime: 5,
                 walkDistance: `${Math.round(minWalkToTransit === Infinity ? 200 : minWalkToTransit)}m`,
+                totalWalkEstimate: Math.round(bestTotalWalk === 9999 ? 500 : bestTotalWalk),
+                bestTransitMode: bestMode,
                 lat: park.coordinates[0],
                 lng: park.coordinates[1],
                 totalCapacity: park.totalCapacity,
                 amenities: park.amenities,
-                // Transit stop availability for mode selection icons
                 hasTrainStop: hasTrain,
                 hasBusStop: hasBus,
                 hasBikeStop: hasBike,
                 nearTrain: nearTrain ? { name: nearTrain.name, distance: nearTrain.distance } : null,
                 nearBus: nearBus ? { name: nearBus.name, distance: nearBus.distance } : null,
-                nearBike: nearBike ? { name: nearBike.name, distance: nearBike.distance } : null
+                nearBike: nearBike ? { name: nearBike.name, distance: nearBike.distance } : null,
+                destStop: destNearTrain ? { name: destNearTrain.name, distance: destNearTrain.distance } : null
             });
         }
 
-        allOptions.sort((a, b) => parseFloat(a.totalCost) - parseFloat(b.totalCost));
+        // Sort by total walking estimate (primary), then cost (secondary)
+        allOptions.sort((a, b) => a.totalWalkEstimate - b.totalWalkEstimate || parseFloat(a.totalCost) - parseFloat(b.totalCost));
         res.json({ success: true, data: allOptions });
 
     } catch (error) {
