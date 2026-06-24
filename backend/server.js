@@ -14,8 +14,8 @@ let parkingCache = { data: null, lastUpdated: null };
 const MOBIDATA_PARK_API = 'https://api.mobidata-bw.de/park-api/api/public/v3/parking-sites';
 const CACHE_DURATION = 5 * 60 * 1000; // 5 Minuten
 
-// Stuttgart bounding box filter
-const STUTTGART_BBOX = { minLat: 48.7, maxLat: 48.85, minLon: 9.05, maxLon: 9.3 };
+// Smaller Stuttgart Zentrum bounding box filter
+const STUTTGART_BBOX = { minLat: 48.76, maxLat: 48.79, minLon: 9.16, maxLon: 9.20 };
 
 function transformSite(site) {
   const capacity = site.capacity || 0;
@@ -38,18 +38,48 @@ function transformSite(site) {
   };
 }
 
+const FALLBACK_PARKING = [
+  { id: 1, name: 'Parkhaus Rathausgarage', coordinates: [48.7741, 9.17787], address: 'Nadlerstraße 19, 70173 Stuttgart', totalCapacity: 133, freeSpaces: 133, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: true, maxHeight: 200 }, status: 'available' },
+  { id: 2, name: 'Tiefgarage Gerber Viertel', coordinates: [48.7723, 9.17245], address: 'Sophienstraße 21, 70178 Stuttgart', totalCapacity: 560, freeSpaces: 560, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: true, maxHeight: null }, status: 'available' },
+  { id: 3, name: 'Parkhaus Hauptbahnhof', coordinates: [48.78535, 9.17748], address: 'Jägerstraße 19, 70174 Stuttgart', totalCapacity: 147, freeSpaces: 147, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: false, maxHeight: null }, status: 'available' },
+  { id: 4, name: 'Parkhaus Stadtmitte', coordinates: [48.7783, 9.17591], address: 'Kronprinzstraße 6, 70173 Stuttgart', totalCapacity: 266, freeSpaces: 266, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: true, maxHeight: 200 }, status: 'available' },
+  { id: 5, name: 'Parkhaus Bohnenviertel', coordinates: [48.77464, 9.18314], address: 'Rosenstraße, 70173 Stuttgart', totalCapacity: 331, freeSpaces: 331, occupancyRate: 0, hasRealtime: true, amenities: { evCharging: false, maxHeight: null }, status: 'available' },
+  { id: 6, name: 'Parkhaus Dorotheen-Quartier', coordinates: [48.77526, 9.18166], address: 'Holzstraße 21, 70173 Stuttgart', totalCapacity: 250, freeSpaces: 250, occupancyRate: 0, hasRealtime: true, amenities: { evCharging: true, maxHeight: 200 }, status: 'available' },
+  { id: 7, name: 'Parkhaus Schloßplatz', coordinates: [48.77994, 9.18095], address: 'Stauffenbergstrasse 5-1, 70173 Stuttgart', totalCapacity: 90, freeSpaces: 90, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: false, maxHeight: 210 }, status: 'available' },
+  { id: 8, name: 'Parkhaus Stephangarage', coordinates: [48.78199, 9.17985], address: 'Kronenstraße 7, 70173 Stuttgart', totalCapacity: 265, freeSpaces: 265, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: false, maxHeight: 200 }, status: 'available' },
+  { id: 9, name: 'Parkhaus Börsenplatz', coordinates: [48.7801, 9.17567], address: 'Huberstraße 2, 70173 Stuttgart', totalCapacity: 176, freeSpaces: 176, occupancyRate: 0, hasRealtime: true, amenities: { evCharging: false, maxHeight: 210 }, status: 'available' },
+  { id: 10, name: 'Parkhaus Kriegsberg', coordinates: [48.78448, 9.17651], address: 'Kriegsbergstr. 32, 70174 Stuttgart', totalCapacity: 255, freeSpaces: 255, occupancyRate: 0, hasRealtime: true, amenities: { evCharging: false, maxHeight: 204 }, status: 'available' },
+  { id: 11, name: 'Parkgalerie Kernerplatz', coordinates: [48.78465, 9.18927], address: 'Kernerplatz 9+10, 70182 Stuttgart', totalCapacity: 141, freeSpaces: 141, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: false, maxHeight: 200 }, status: 'available' },
+  { id: 12, name: 'Parkhaus Königbau Passagen', coordinates: [48.77972, 9.17811], address: 'Bolzstraße 5, 70173 Stuttgart', totalCapacity: 412, freeSpaces: 412, occupancyRate: 0, hasRealtime: true, amenities: { evCharging: true, maxHeight: 200 }, status: 'available' },
+];
+parkingCache.data = FALLBACK_PARKING;
+parkingCache.lastUpdated = Date.now();
+
 async function fetchAndCacheParking() {
-  const response = await axios.get(MOBIDATA_PARK_API, {
-    headers: { 'Accept': 'application/json' }
-  });
-  const items = response.data?.items || [];
-  const processed = items
-    .filter(s => s.purpose === 'CAR')
-    .map(transformSite);
-    
-  parkingCache.data = processed;
-  parkingCache.lastUpdated = Date.now();
-  return processed;
+  try {
+    const response = await axios.get(MOBIDATA_PARK_API, {
+      headers: { 'Accept': 'application/json' },
+      timeout: 10000
+    });
+    const items = response.data?.items || [];
+    const processed = items
+      .filter(s => s.purpose === 'CAR')
+      .map(transformSite)
+      .filter(s => 
+        s.coordinates[0] >= STUTTGART_BBOX.minLat && 
+        s.coordinates[0] <= STUTTGART_BBOX.maxLat && 
+        s.coordinates[1] >= STUTTGART_BBOX.minLon && 
+        s.coordinates[1] <= STUTTGART_BBOX.maxLon
+      );
+    if (processed.length > 0) {
+      parkingCache.data = processed;
+      parkingCache.lastUpdated = Date.now();
+    }
+    return parkingCache.data;
+  } catch (err) {
+    console.error('MobiData BW API Error:', err.message);
+    return parkingCache.data || FALLBACK_PARKING;
+  }
 }
 
 app.get('/api/parking/stuttgart', async (req, res) => {
@@ -109,6 +139,12 @@ function distanceMeters([lat1, lon1], [lat2, lon2]) {
     const dLon = (lon2 - lon1) * Math.PI / 180;
     const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function pathLengthMeters(path) {
+  let total = 0;
+  for (let i = 1; i < path.length; i++) total += distanceMeters(path[i - 1], path[i]);
+  return total;
 }
 
 // Estimate parking price based on type hints in the name
@@ -185,7 +221,7 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
     const key = `${from[0].toFixed(5)},${from[1].toFixed(5)}-${to[0].toFixed(5)},${to[1].toFixed(5)}-${profile}`;
     if (osrmCache.has(key)) return osrmCache.get(key);
 
-    const profileMap = { driving: 'driving', walking: 'foot' };
+    const profileMap = { driving: 'driving', walking: 'foot', cycling: 'cycling' };
     const url = `https://router.project-osrm.org/route/v1/${profileMap[profile] || 'driving'}/${from[1]},${from[0]};${to[1]},${to[0]}?geometries=geojson&overview=full&steps=false`;
 
     try {
@@ -193,7 +229,7 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
         if (res.data?.code === 'Ok' && res.data?.routes?.length > 0) {
             const route = res.data.routes[0];
             const coords = route.geometry.coordinates;
-            if (coords.length < 3) { osrmCache.set(key, null); return null; }
+            if (coords.length < 3) return null;
             const rawPath = coords.map(c => [+c[1].toFixed(6), +c[0].toFixed(6)]);
             const path = simplifyPath(rawPath);
             const durationMin = Math.max(1, Math.round(route.duration / 60));
@@ -202,27 +238,147 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
             return result;
         }
     } catch {}
-    osrmCache.set(key, null);
     return null;
 }
 
-// Build route segments for map display using OSRM real roads
-async function generateRealSegments(parkCoords, stationCoords, destCoords, startCoords) {
+// ====== Transit Stops Cache ======
+const FALLBACK_STOPS = require('./transit_stops_fallback');
+let transitStopsCache = { data: [...FALLBACK_STOPS], lastUpdated: Date.now() };
+const TRANSIT_CACHE_DURATION = 30 * 60 * 1000; // 30 minutes
+
+async function fetchAndCacheTransitStops() {
+    const now = Date.now();
+    if (transitStopsCache.data && (now - transitStopsCache.lastUpdated) < TRANSIT_CACHE_DURATION) {
+        return transitStopsCache.data;
+    }
+    try {
+        const searchResponse = await axios.get(`${MOBIDATA_BASE_URL}/package_search?q=haltestellen-baden-wuerttemberg`, { timeout: 8000 });
+        const dataset = searchResponse.data.result.results[0];
+        if (!dataset) return transitStopsCache.data || FALLBACK_STOPS;
+        const resource = dataset.resources.find(r => r.format.toLowerCase() === 'geojson' || r.format.toLowerCase() === 'json' || r.format.toLowerCase() === 'csv');
+        if (!resource) return transitStopsCache.data || FALLBACK_STOPS;
+        const actualData = await axios.get(resource.url, { timeout: 30000 });
+        const features = actualData.data.features || actualData.data;
+        const allStops = (features || []).map(f => ({
+            name: f.properties?.name || f.properties?.title || 'Unknown',
+            coordinates: [f.geometry.coordinates[1], f.geometry.coordinates[0]],
+            type: (f.properties?.type || f.properties?.transport_mode || '').toLowerCase()
+        }));
+        transitStopsCache.data = allStops;
+        transitStopsCache.lastUpdated = Date.now();
+        return allStops;
+    } catch {
+        return transitStopsCache.data || FALLBACK_STOPS;
+    }
+}
+
+function findNearestTransitStop(coords, stops, modeKeywords) {
+    let best = null;
+    let bestDist = Infinity;
+    for (const stop of stops) {
+        const t = stop.type || '';
+        const matches = modeKeywords.some(kw => t.includes(kw));
+        if (!matches) continue;
+        const d = distanceMeters(coords, stop.coordinates);
+        if (d < bestDist) {
+            bestDist = d;
+            best = stop;
+        }
+    }
+    return best ? { name: best.name, coordinates: best.coordinates, distance: Math.round(bestDist) } : null;
+}
+
+// Build 4-segment route: drive → walk to stop → transit/cycle → walk to dest
+async function generateRouteWithMode(parkCoords, startCoords, destCoords, destName, transportMode) {
     const center = startCoords || [48.7758, 9.1829];
 
-    const [drivingResult, walkResult] = await Promise.all([
-        fetchOSRMRoute(center, parkCoords, 'driving'),
-        fetchOSRMRoute(parkCoords, stationCoords, 'walking')
-    ]);
-
+    const drivingResult = await fetchOSRMRoute(center, parkCoords, 'driving');
     const drivingPath = drivingResult?.path || interpolatePoints(center, parkCoords);
     const driveMinutes = drivingResult?.durationMin || Math.max(1, Math.round(distanceMeters(center, parkCoords) / 200));
 
-    return [
-        { mode: 'driving', path: drivingPath, label: 'Drive', driveMinutes },
-        { mode: 'walking', path: walkResult?.path || interpolatePoints(parkCoords, stationCoords, 4), label: 'Walk to station' },
-        { mode: 'transit', path: [stationCoords, destCoords], label: 'Transit' }
+    const segments = [
+        { mode: 'driving', path: drivingPath, label: 'Drive', durationMin: driveMinutes }
     ];
+
+    // Find nearest transit stop of the chosen type
+    const allStops = await fetchAndCacheTransitStops();
+    let modeKeywords = ['train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'];
+    let transitProfile = 'driving';
+    let modeLabel = 'transit';
+
+    if (transportMode === 'bus') {
+        modeKeywords = ['bus'];
+        transitProfile = 'driving';
+        modeLabel = 'bus';
+    } else if (transportMode === 'cycling' || transportMode === 'bicycle') {
+        modeKeywords = ['bike', 'bicycle', 'cycling'];
+        transitProfile = 'cycling';
+        modeLabel = 'cycling';
+    } else {
+        // default train
+        modeKeywords = ['train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'];
+        transitProfile = 'driving';
+        modeLabel = 'train';
+    }
+
+    const nearStop = findNearestTransitStop(parkCoords, allStops, modeKeywords);
+    const nearDestStop = findNearestTransitStop(destCoords, allStops, modeKeywords);
+
+    const transitFrom = nearStop?.coordinates || parkCoords;
+    const transitTo = nearDestStop?.coordinates || destCoords;
+    const stopName = nearStop?.name || 'Transit stop';
+    const destStopName = nearDestStop?.name || 'Destination stop';
+
+    // Segment 2: Walk from parking to transit stop (OSRM foot, fallback interpolation on failure)
+    const walkDistMeters = distanceMeters(parkCoords, transitFrom);
+    const wResult = await fetchOSRMRoute(parkCoords, transitFrom, 'walking');
+    const walkPath = wResult?.path || interpolatePoints(parkCoords, transitFrom, 4);
+    const walkMinutes = wResult?.durationMin || Math.max(1, Math.round(walkDistMeters / 80));
+    segments.push({
+        mode: 'walking',
+        path: walkPath,
+        label: 'Walk',
+        durationMin: walkMinutes,
+        stopName
+    });
+
+    // Segment 3: Transit/Cycle from stop to destination area
+    if (modeLabel === 'cycling') {
+        const bikeResult = await fetchOSRMRoute(transitFrom, transitTo, 'cycling');
+        segments.push({
+            mode: 'cycling',
+            path: bikeResult?.path || interpolatePoints(transitFrom, transitTo, 8),
+            label: 'Cycle',
+            durationMin: bikeResult?.durationMin || Math.max(1, Math.round(distanceMeters(transitFrom, transitTo) / 80)),
+            fromStop: stopName,
+            toStop: destStopName
+        });
+    } else {
+        const transitResult = await fetchOSRMRoute(transitFrom, transitTo, 'driving');
+        segments.push({
+            mode: modeLabel === 'bus' ? 'bus' : 'train',
+            path: transitResult?.path || interpolatePoints(transitFrom, transitTo, 6),
+            label: modeLabel === 'bus' ? 'Bus' : 'Train',
+            durationMin: transitResult?.durationMin || Math.max(1, Math.round(distanceMeters(transitFrom, transitTo) / 80)),
+            fromStop: stopName,
+            toStop: destStopName
+        });
+    }
+
+    // Segment 4: Walk from dest stop to final destination (OSRM foot, fallback interpolation on failure)
+    const walkDestDist = distanceMeters(transitTo, destCoords);
+    const wdResult = await fetchOSRMRoute(transitTo, destCoords, 'walking');
+    const walkDestPath = wdResult?.path || interpolatePoints(transitTo, destCoords, 4);
+    const walkDestMinutes = wdResult?.durationMin || Math.max(1, Math.round(walkDestDist / 80));
+    segments.push({
+        mode: 'walking',
+        path: walkDestPath,
+        label: 'Walk',
+        durationMin: walkDestMinutes,
+        stopName: destStopName
+    });
+
+    return { segments, transitFrom, transitTo, stopName, destStopName, nearStop, nearDestStop };
 }
 
 app.get('/api/health', (req, res) => {
@@ -231,7 +387,7 @@ app.get('/api/health', (req, res) => {
 
 app.post('/api/routes', async (req, res) => {
     try {
-        const { destination, startCoords, arrivalTime, parkingId } = req.body;
+        const { destination, startCoords, arrivalTime, parkingId, transportMode, maxTimeMinutes = 120, destCoords: reqDestCoords } = req.body;
 
         let liveParkings = await getParkingSites();
         if (!liveParkings.length) {
@@ -253,167 +409,139 @@ app.post('/api/routes', async (req, res) => {
             hafasAvailable = true;
         } catch { hafasAvailable = false; }
 
-        let destStation = null;
-        if (hafasAvailable) {
-            try {
-                const destLocs = await withTimeout(client.locations(destination || 'Stuttgart Zentrum', { results: 1 }), 4000);
-                if (destLocs && destLocs.length > 0) destStation = destLocs[0];
-            } catch {}
-        }
+        let destCoords = reqDestCoords || null;
+        let destName = destination || 'Stuttgart Zentrum';
 
-        const destName = destStation?.name || destination || 'Stuttgart Zentrum';
+        if (!destCoords) {
+            let destStation = null;
+            if (hafasAvailable) {
+                try {
+                    const destLocs = await withTimeout(client.locations(destName, { results: 1 }), 4000);
+                    if (destLocs && destLocs.length > 0) destStation = destLocs[0];
+                } catch {}
+            }
+            destName = destStation?.name || destName;
+            destCoords = destStation?.location?.latitude
+                ? [+destStation.location.latitude.toFixed(6), +destStation.location.longitude.toFixed(6)]
+                : estimateDestCoords(destName);
+        }
         const now = new Date();
         const date = arrivalTime ? new Date(arrivalTime) : now;
         const timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
 
-        const allOptions = [];
-
-        for (const park of liveParkings) {
-            // Find nearest station via HAFAS or estimate
-            let walkDistance = 200;
-            let walkTimeMin = 3;
-            let nearbyStation = null;
-
-            if (hafasAvailable) {
-                try {
-                    const stationQuery = park.name
-                        .replace(/P(\+R)?\s*/i, '').replace(/Parkplatz\s*/i, '')
-                        .replace(/Parkhaus\s*/i, '').replace(/Tiefgarage\s*/i, '')
-                        .replace(/Parkgarage\s*/i, '').replace(/Parkbereich\s*/i, '')
-                        .replace(/Garbe\s*/i, '').trim() || 'Stuttgart';
-
-                    const locs = await withTimeout(client.locations(stationQuery, { results: 3 }), 4000);
-                    if (locs && locs.length > 0) {
-                        let minD = Infinity;
-                        for (const loc of locs) {
-                            if (loc.location?.latitude && loc.location?.longitude) {
-                                const d = distanceMeters(park.coordinates, [loc.location.latitude, loc.location.longitude]);
-                                if (d < minD) { minD = d; nearbyStation = loc; }
-                            }
-                        }
-                        if (nearbyStation) {
-                            walkDistance = Math.round(minD);
-                            walkTimeMin = Math.max(1, Math.round(walkDistance / 80));
-                        }
-                    }
-                } catch {}
-            }
-
-            // Try HAFAS journey (with timeout), or build estimated timeline
-            let journey = null;
-            if (hafasAvailable && nearbyStation && destStation) {
-                try {
-                    const journeyOpts = { results: 1 };
-                    if (arrivalTime) {
-                        journeyOpts.arrival = date;
-                    } else {
-                        journeyOpts.departure = date;
-                    }
-                    const jRes = await withTimeout(client.journeys(nearbyStation, destStation, journeyOpts), 5000);
-                    if (jRes && jRes.journeys && jRes.journeys.length > 0) journey = jRes.journeys[0];
-                } catch {}
-            }
-
+        // ===== Single parking + mode = full 4-segment route =====
+        if (parkingId && transportMode && transportMode !== 'transit') {
+            const park = liveParkings[0];
             const parkingPrice = estimateParkingPrice(park.name);
-            const stationCoords = nearbyStation?.location?.latitude
-                ? [+nearbyStation.location.latitude.toFixed(6), +nearbyStation.location.longitude.toFixed(6)]
-                : estimateStationCoords(park.coordinates, walkDistance);
-            const destCoords = destStation?.location?.latitude
-                ? [+destStation.location.latitude.toFixed(6), +destStation.location.longitude.toFixed(6)]
-                : estimateDestCoords(destName);
+            const parkingPriceNum = parseFloat(parkingPrice.toFixed(2));
 
-            const baseVariations = [
-                { ticketPrice: 3.00, lineName: 'S-Bahn', travelMinutes: 25, timeOffset: 0, variantLabel: 'Standard' },
-                { ticketPrice: 4.50, lineName: 'ICE', travelMinutes: 15, timeOffset: -5, variantLabel: 'Express' },
-                { ticketPrice: 2.50, lineName: 'Bus 42', travelMinutes: 35, timeOffset: 10, variantLabel: 'Economy' },
+            const routeData = await generateRouteWithMode(park.coordinates, startCoords, destCoords, destName, transportMode);
+            const { segments, stopName, destStopName } = routeData;
+
+            const driveMinutes = segments[0]?.durationMin || 15;
+            const walkMin1 = segments[1]?.durationMin || 3;
+            const transitMin = segments[2]?.durationMin || 20;
+            const walkMin2 = segments[3]?.durationMin || 3;
+            const totalTimeMinutes = driveMinutes + walkMin1 + transitMin + walkMin2;
+
+            let lineName = 'S-Bahn';
+            let modeLabel = 'transit';
+            if (transportMode === 'bus') { lineName = 'Bus'; modeLabel = 'bus'; }
+            else if (transportMode === 'cycling' || transportMode === 'bicycle') { lineName = 'Bicycle'; modeLabel = 'cycling'; }
+
+            const totalCost = parkingPriceNum;
+            const savings = Math.max(0, DIRECT_CITY_PARKING_COST - totalCost);
+
+            const depTime = new Date(date);
+            depTime.setMinutes(depTime.getMinutes() - totalTimeMinutes);
+            const parkArrive = new Date(depTime);
+            parkArrive.setMinutes(parkArrive.getMinutes() + driveMinutes);
+            const transitDep = new Date(parkArrive);
+            transitDep.setMinutes(transitDep.getMinutes() + walkMin1);
+            const transitArr = new Date(transitDep);
+            transitArr.setMinutes(transitArr.getMinutes() + transitMin);
+            const destArrive = new Date(transitArr);
+            destArrive.setMinutes(destArrive.getMinutes() + walkMin2);
+
+            const timeline = [
+                { time: timeFormatter.format(depTime), mode: 'driving', name: 'Current Location', details: 'Drive to parking' },
+                { time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, details: 'Park car' },
+                { time: timeFormatter.format(transitDep), mode: 'walking', name: stopName, details: `Walk to ${stopName} (${walkMin1} min)` },
+                { time: timeFormatter.format(transitArr), mode: modeLabel, name: destStopName, details: `${lineName} → ${destName}` },
+                { time: timeFormatter.format(destArrive), mode: 'walking', name: destName, details: `Walk to destination (${walkMin2} min)` },
+                { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, details: 'Arrive at destination' },
             ];
-            const variations = (parkingId && liveParkings.length === 1) ? baseVariations : [baseVariations[0]];
 
-            // Compute real route segments once (shared across all variations)
-            const segments = await generateRealSegments(park.coordinates, stationCoords, destCoords, startCoords);
-            const driveMinutes = segments[0]?.driveMinutes || 15;
-
-            for (const v of variations) {
-                const totalCost = parseFloat(parkingPrice) + v.ticketPrice;
-                const savings = Math.max(0, DIRECT_CITY_PARKING_COST - totalCost);
-
-                let travelMinutes = v.travelMinutes;
-                let lineName = v.lineName;
-                const timeline = [];
-
-                if (journey && journey.legs && journey.legs.length > 0) {
-                    const dep = new Date(journey.legs[0].departure);
-                    const arr = new Date(journey.legs[journey.legs.length - 1].arrival);
-                    travelMinutes = Math.round((arr - dep) / 60000);
-                    const totalTimeMinutes = travelMinutes + walkTimeMin + driveMinutes;
-                    const drivingStart = new Date(dep.getTime() - ((walkTimeMin + driveMinutes) * 60000));
-
-                    timeline.push({ time: timeFormatter.format(drivingStart), mode: 'driving', name: 'Current Location', details: 'Drive to parking' });
-                    timeline.push({ time: timeFormatter.format(new Date(dep.getTime() - (walkTimeMin * 60000))), mode: 'parking', name: park.name, details: `${walkDistance}m to station` });
-
-                    for (const leg of journey.legs) {
-                        if (leg.line) {
-                            lineName = leg.line.name;
-                            timeline.push({
-                                time: timeFormatter.format(leg.departureDelay
-                                    ? new Date(new Date(leg.departure).getTime() + leg.departureDelay * 1000)
-                                    : new Date(leg.departure)),
-                                mode: 'transit',
-                                name: leg.origin?.name || leg.origin,
-                                details: `${leg.line.name} → ${leg.direction || 'Destination'}`
-                            });
-                        } else if (leg.walking) {
-                            const wm = Math.round((new Date(leg.arrival) - new Date(leg.departure)) / 60000);
-                            if (wm > 0) {
-                                timeline.push({
-                                    time: timeFormatter.format(new Date(leg.departure)),
-                                    mode: 'walking', name: leg.origin?.name || 'Walk', details: `${wm} min walk`
-                                });
-                            }
-                        }
-                    }
-                    timeline.push({ time: timeFormatter.format(arr), mode: 'destination', name: destStation?.name || destName, details: 'Arrive at destination' });
-                } else {
-                    const totalTimeMinutes = travelMinutes + walkTimeMin + driveMinutes;
-                    const depTime = new Date(date);
-                    depTime.setMinutes(depTime.getMinutes() - totalTimeMinutes + v.timeOffset);
-                    const parkArrive = new Date(depTime);
-                    parkArrive.setMinutes(parkArrive.getMinutes() + driveMinutes + walkTimeMin);
-                    const transitDep = new Date(parkArrive);
-                    transitDep.setMinutes(transitDep.getMinutes() + 2);
-                    const transitArr = new Date(transitDep);
-                    transitArr.setMinutes(transitArr.getMinutes() + travelMinutes);
-
-                    timeline.push({ time: timeFormatter.format(depTime), mode: 'driving', name: 'Current Location', details: 'Drive to parking' });
-                    timeline.push({ time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, details: `${walkDistance}m to station` });
-                    timeline.push({ time: timeFormatter.format(transitDep), mode: 'transit', name: nearbyStation?.name || 'Station', details: `${lineName} → ${destName}` });
-                    timeline.push({ time: timeFormatter.format(transitArr), mode: 'destination', name: destName, details: 'Arrive at destination' });
-                }
-
-                const totalTimeMinutes = travelMinutes + walkTimeMin + driveMinutes;
-
-                allOptions.push({
+            return res.json({
+                success: true,
+                data: [{
                     id: park.id, parkingName: park.name,
-                    parkingPrice: parkingPrice.toFixed(2),
-                    ticketPrice: v.ticketPrice.toFixed(2),
+                    parkingPrice: parkingPriceNum.toFixed(2),
+                    ticketPrice: '0.00',
                     totalCost: totalCost.toFixed(2),
                     savings: savings.toFixed(2),
                     totalTime: `${totalTimeMinutes} min`,
-                    travelDuration: `${travelMinutes} min`,
-                    walkTime: walkTimeMin,
-                    walkDistance: `${walkDistance}m`,
+                    travelDuration: `${transitMin} min`,
+                    walkTime: walkMin1 + walkMin2,
+                    walkDistance: `${walkMin1 + walkMin2} min`,
                     transitRoute: lineName,
-                    variantLabel: v.variantLabel,
-                    timeline,
                     segments,
+                    timeline,
+                    transitType: modeLabel,
                     lat: park.coordinates[0],
                     lng: park.coordinates[1],
-                    distanceToStation: `${walkDistance}m`,
-                    walkTimeToStation: walkTimeMin,
                     totalCapacity: park.totalCapacity,
                     amenities: park.amenities
-                });
-            }
+                }]
+            });
+        }
+
+        // ===== Default: list parking options with basic info =====
+        const allOptions = [];
+        const allStops = await fetchAndCacheTransitStops();
+
+        for (const park of liveParkings) {
+            const parkingPrice = estimateParkingPrice(park.name);
+            const totalCost = parseFloat(parkingPrice.toFixed(2));
+            const savings = Math.max(0, DIRECT_CITY_PARKING_COST - totalCost);
+            const driveMinutes = Math.max(1, Math.round(distanceMeters(startCoords || [48.7758, 9.1829], park.coordinates) / 200));
+
+            // Find nearest stops of each type for display
+            const nearTrain = findNearestTransitStop(park.coordinates, allStops, ['train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn']);
+            const nearBus = findNearestTransitStop(park.coordinates, allStops, ['bus']);
+            const nearBike = findNearestTransitStop(park.coordinates, allStops, ['bike', 'bicycle', 'cycling']);
+
+            const minWalkToTransit = Math.min(
+                nearTrain?.distance || Infinity,
+                nearBus?.distance || Infinity,
+                nearBike?.distance || Infinity
+            );
+
+            const hasTrain = nearTrain && nearTrain.distance < 1000;
+            const hasBus = nearBus && nearBus.distance < 1000;
+            const hasBike = nearBike && nearBike.distance < 1000;
+
+            allOptions.push({
+                id: park.id, parkingName: park.name,
+                parkingPrice: parkingPrice.toFixed(2),
+                totalCost: totalCost.toFixed(2),
+                savings: savings.toFixed(2),
+                totalTime: `${driveMinutes + 30} min`,
+                travelDuration: '30 min',
+                walkTime: 5,
+                walkDistance: `${Math.round(minWalkToTransit === Infinity ? 200 : minWalkToTransit)}m`,
+                lat: park.coordinates[0],
+                lng: park.coordinates[1],
+                totalCapacity: park.totalCapacity,
+                amenities: park.amenities,
+                // Transit stop availability for mode selection icons
+                hasTrainStop: hasTrain,
+                hasBusStop: hasBus,
+                hasBikeStop: hasBike,
+                nearTrain: nearTrain ? { name: nearTrain.name, distance: nearTrain.distance } : null,
+                nearBus: nearBus ? { name: nearBus.name, distance: nearBus.distance } : null,
+                nearBike: nearBike ? { name: nearBike.name, distance: nearBike.distance } : null
+            });
         }
 
         allOptions.sort((a, b) => parseFloat(a.totalCost) - parseFloat(b.totalCost));
@@ -433,6 +561,49 @@ app.get('/api/radar', async (req, res) => {
     } catch (error) {
         console.error("Radar error:", error);
         res.status(500).json({ success: false });
+    }
+});
+
+// CKAN API Base URL
+const MOBIDATA_BASE_URL = 'https://mobidata-bw.de/api/3/action';
+
+app.get('/api/parkbauten', async (req, res) => {
+    try {
+        const searchResponse = await axios.get(`${MOBIDATA_BASE_URL}/package_search?q=Parkbauten`, { timeout: 8000 });
+        const dataset = searchResponse.data.result.results[0];
+        if (!dataset) return res.json({ type: "FeatureCollection", features: [] });
+
+        const geoJsonResource = dataset.resources.find(r => r.format.toLowerCase() === 'geojson' || r.format.toLowerCase() === 'json');
+        if (!geoJsonResource) return res.json({ type: "FeatureCollection", features: [] });
+
+        const actualData = await axios.get(geoJsonResource.url, { timeout: 10000 });
+        res.json(actualData.data);
+    } catch (error) {
+        console.error('Error fetching parking data:', error.message);
+        res.json({ type: "FeatureCollection", features: [] });
+    }
+});
+
+app.get('/api/transit-stops', async (req, res) => {
+    try {
+        // Try to fetch fresh data in the background
+        fetchAndCacheTransitStops().catch(() => {});
+        const stops = transitStopsCache.data || FALLBACK_STOPS;
+        const features = stops.map(s => ({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [s.coordinates[1], s.coordinates[0]] },
+            properties: { name: s.name, type: s.type }
+        }));
+        res.json({ type: "FeatureCollection", features });
+    } catch (error) {
+        console.error('Error serving transit data:', error.message);
+        const stops = FALLBACK_STOPS;
+        const features = stops.map(s => ({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [s.coordinates[1], s.coordinates[0]] },
+            properties: { name: s.name, type: s.type }
+        }));
+        res.json({ type: "FeatureCollection", features });
     }
 });
 

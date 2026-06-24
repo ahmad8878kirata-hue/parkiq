@@ -9,12 +9,16 @@ const Search = () => {
     const selectedParking = locationState.state?.selectedParking || null;
     const initialLocation = locationState.state?.currentLocation || 'Stuttgart';
     const initialCoords = locationState.state?.startCoords || [48.7758, 9.1829];
-    const [destination, setDestination] = useState('Stuttgart Zentrum');
+    const initialDest = locationState.state?.destination || '';
+    const initialDestCoords = locationState.state?.destCoords || null;
+    const [destination, setDestination] = useState(initialDest || 'Stuttgart Zentrum');
     const [startLocation, setStartLocation] = useState(initialLocation);
     const [startCoords, setStartCoords] = useState(initialCoords);
     const [activeDay, setActiveDay] = useState(28);
     const [time, setTime] = useState('08:30');
     const [showDate, setShowDate] = useState(false);
+    const [transportMode, setTransportMode] = useState('transit');
+    const [maxTimeMinutes, setMaxTimeMinutes] = useState(120);
 
     const [loadingLocation, setLoadingLocation] = useState(false);
 
@@ -23,13 +27,17 @@ const Search = () => {
         let finalStartCoords = startCoords;
         let finalDestName = destination;
         let finalStartName = startLocation;
+        let finalDestCoords = initialDestCoords;
 
         try {
-            // Find closest match for destination
-            const destRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(destination)}&limit=1`);
-            const destData = await destRes.json();
-            if (destData.features && destData.features.length > 0) {
-                finalDestName = destData.features[0].properties.name || destination;
+            // If no pre-set destination coords, geocode the destination name
+            if (!finalDestCoords) {
+                const destRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(destination)}&limit=1`);
+                const destData = await destRes.json();
+                if (destData.features && destData.features.length > 0) {
+                    finalDestName = destData.features[0].properties.name || destination;
+                    finalDestCoords = [destData.features[0].geometry.coordinates[1], destData.features[0].geometry.coordinates[0]];
+                }
             }
 
             // Find closest match for start location
@@ -52,8 +60,11 @@ const Search = () => {
                 destination: finalDestName,
                 startLocation: finalStartName,
                 startCoords: finalStartCoords,
+                destCoords: finalDestCoords,
                 arrivalTime,
-                parkingId: selectedParking?.id
+                parkingId: selectedParking?.id,
+                transportMode,
+                maxTimeMinutes
             }
         });
     };
@@ -111,7 +122,27 @@ const Search = () => {
                         value={destination} 
                         onChange={(e) => setDestination(e.target.value)}
                         autoFocus
-                        style={{width: '100%', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1.5px solid var(--primary-light)', outline: 'none', fontFamily: 'var(--font-body)', fontSize: '1rem', background: 'var(--surface)', color: 'var(--text-main)', boxShadow: '0 4px 12px rgba(244, 63, 94, 0.1)'}}
+                        style={{width: '100%', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1.5px solid var(--primary-light)', outline: 'none', fontFamily: 'var(--font-body)', fontSize: '1rem', background: 'var(--surface)', color: 'var(--text-main)', boxShadow: '0 4px 12px rgba(244, 63, 94, 0.1)', marginBottom: '1rem'}}
+                    />
+
+                    <label style={{display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: '600'}}>Transport Mode</label>
+                    <select 
+                        value={transportMode} 
+                        onChange={(e) => setTransportMode(e.target.value)}
+                        style={{width: '100%', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1.5px solid var(--border-color)', outline: 'none', background: 'var(--surface)', color: 'var(--text-main)', marginBottom: '1rem'}}
+                    >
+                        <option value="transit">Public Transit</option>
+                        <option value="bicycle">Bicycle</option>
+                        <option value="walking">Walking</option>
+                    </select>
+
+                    <label style={{display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: '600'}}>Max Travel Time ({maxTimeMinutes} min)</label>
+                    <input 
+                        type="range" 
+                        min="10" max="240" step="10"
+                        value={maxTimeMinutes} 
+                        onChange={(e) => setMaxTimeMinutes(parseInt(e.target.value))}
+                        style={{width: '100%', marginBottom: '1rem'}}
                     />
                 </div>
                 
