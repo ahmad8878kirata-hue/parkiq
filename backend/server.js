@@ -102,6 +102,8 @@ app.get('/api/parking/stuttgart', async (req, res) => {
 
 const DIRECT_CITY_PARKING_COST = 18.00;
 const DEFAULT_PARKING_PRICE = 4.00;
+const MAX_WALK_PER_SEGMENT = 1000; // meters – max reasonable walk to/from a transit stop
+const MAX_WALK_TOTAL = 1500; // meters – max total walking for park→stop + stop→dest
 
 let hafasClient = null;
 async function getClient() {
@@ -222,18 +224,32 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
     if (osrmCache.has(key)) return osrmCache.get(key);
 
     const profileMap = { driving: 'driving', walking: 'foot', cycling: 'cycling' };
-    const url = `https://router.project-osrm.org/route/v1/${profileMap[profile] || 'driving'}/${from[1]},${from[0]};${to[1]},${to[0]}?geometries=geojson&overview=full&steps=false`;
+    const url = `https://router.project-osrm.org/route/v1/${profileMap[profile] || 'driving'}/${from[1]},${from[0]};${to[1]},${to[0]}?geometries=geojson&overview=full&steps=false&alternatives=true`;
 
     try {
         const res = await axios.get(url, { timeout: 8000 });
         if (res.data?.code === 'Ok' && res.data?.routes?.length > 0) {
-            const route = res.data.routes[0];
-            const coords = route.geometry.coordinates;
-            if (coords.length < 3) return null;
-            const rawPath = coords.map(c => [+c[1].toFixed(6), +c[0].toFixed(6)]);
-            const path = simplifyPath(rawPath);
-            const durationMin = Math.max(1, Math.round(route.duration / 60));
-            const result = { path, durationMin };
+            let bestRoute = res.data.routes[0];
+            let bestPathLength = Infinity;
+            let bestRawPath = null;
+
+            for (const route of res.data.routes) {
+                const coords = route.geometry.coordinates;
+                if (coords.length < 3) continue;
+                const rawPath = coords.map(c => [+c[1], +c[0]]);
+                const length = pathLengthMeters(rawPath);
+                if (length < bestPathLength) {
+                    bestPathLength = length;
+                    bestRoute = route;
+                    bestRawPath = rawPath;
+                }
+            }
+
+            if (!bestRawPath) return null;
+            const fixedPath = bestRawPath.map(c => [+c[0].toFixed(6), +c[1].toFixed(6)]);
+            const path = simplifyPath(fixedPath);
+            const durationMin = Math.max(1, Math.round(bestRoute.duration / 60));
+            const result = { path, durationMin, pathLength: Math.round(bestPathLength) };
             osrmCache.set(key, result);
             return result;
         }
@@ -288,6 +304,75 @@ function findNearestTransitStop(coords, stops, modeKeywords) {
     return best ? { name: best.name, coordinates: best.coordinates, distance: Math.round(bestDist) } : null;
 }
 
+// Find top N nearest transit stops by Haversine distance
+function findTopTransitStops(coords, stops, modeKeywords, count = 3) {
+    const scored = [];
+    for (const stop of stops) {
+        const t = stop.type || '';
+        const matches = modeKeywords.some(kw => t.includes(kw));
+        if (!matches) continue;
+        scored.push({ stop, dist: distanceMeters(coords, stop.coordinates) });
+    }
+    scored.sort((a, b) => a.dist - b.dist);
+    return scored.slice(0, count).map(s => ({
+        name: s.stop.name,
+        coordinates: s.stop.coordinates,
+        distance: Math.round(s.dist)
+    }));
+}
+
+// Find the transit stop with the shortest actual walking path (via OSRM).
+// Considers top N candidates by Haversine, fetches OSRM walking routes for each,
+// and picks the one with the shortest actual walking distance.
+// Returns null if no candidate is within maxWalkMeters.
+async function findNearestTransitStopByWalking(coords, stops, modeKeywords, maxCandidates = 5, maxWalkMeters = MAX_WALK_PER_SEGMENT) {
+    const scored = [];
+    for (const stop of stops) {
+        const t = stop.type || '';
+        const matches = modeKeywords.some(kw => t.includes(kw));
+        if (!matches) continue;
+        scored.push({ stop, haversineDist: distanceMeters(coords, stop.coordinates) });
+    }
+
+    if (scored.length === 0) return null;
+
+    // Expand search if the nearest Haversine candidate is already over limit
+    scored.sort((a, b) => a.haversineDist - b.haversineDist);
+    const effectiveCandidates = scored[0].haversineDist > maxWalkMeters ? Math.min(scored.length, 10) : maxCandidates;
+    const candidates = scored.slice(0, effectiveCandidates);
+
+    let bestStop = null;
+    let bestDist = Infinity;
+
+    for (const { stop } of candidates) {
+        const route = await fetchOSRMRoute(coords, stop.coordinates, 'walking');
+        const walkDist = route ? (route.pathLength || pathLengthMeters(route.path)) : distanceMeters(coords, stop.coordinates);
+        if (walkDist > maxWalkMeters) continue;
+        if (walkDist < bestDist) {
+            bestDist = walkDist;
+            bestStop = stop;
+        }
+    }
+
+    // If nothing within limit, take the shortest OSRM route regardless
+    if (!bestStop) {
+        for (const { stop } of candidates) {
+            const route = await fetchOSRMRoute(coords, stop.coordinates, 'walking');
+            const walkDist = route ? (route.pathLength || pathLengthMeters(route.path)) : distanceMeters(coords, stop.coordinates);
+            if (walkDist < bestDist) {
+                bestDist = walkDist;
+                bestStop = stop;
+            }
+        }
+    }
+
+    return bestStop ? {
+        name: bestStop.name,
+        coordinates: bestStop.coordinates,
+        distance: Math.round(bestDist === Infinity ? scored[0].haversineDist : bestDist)
+    } : null;
+}
+
 // Build 4-segment route: drive → walk to stop → transit/cycle → walk to dest
 async function generateRouteWithMode(parkCoords, startCoords, destCoords, destName, transportMode) {
     const center = startCoords || [48.7758, 9.1829];
@@ -321,28 +406,56 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
         modeLabel = 'train';
     }
 
-    const nearStop = findNearestTransitStop(parkCoords, allStops, modeKeywords);
-    const nearDestStop = findNearestTransitStop(destCoords, allStops, modeKeywords);
+    // Use actual OSRM walking routes to find the truly nearest and most reasonable stops
+    let nearStop = await findNearestTransitStopByWalking(parkCoords, allStops, modeKeywords);
+    let nearDestStop = await findNearestTransitStopByWalking(destCoords, allStops, modeKeywords);
+
+    // If either walking distance exceeds the per-segment limit, try the top 5 stops
+    // from each side as pairs to find the combination with the lowest total walking
+    if (!nearStop || !nearDestStop || nearStop.distance > MAX_WALK_PER_SEGMENT || nearDestStop.distance > MAX_WALK_PER_SEGMENT) {
+        const parkCandidates = findTopTransitStops(parkCoords, allStops, modeKeywords, 5);
+        const destCandidates = findTopTransitStops(destCoords, allStops, modeKeywords, 5);
+        let bestPair = null;
+        let bestTotalWalk = Infinity;
+        for (const ps of parkCandidates) {
+            const pRoute = await fetchOSRMRoute(parkCoords, ps.coordinates, 'walking');
+            const pDist = pRoute ? (pRoute.pathLength || pathLengthMeters(pRoute.path)) : ps.distance;
+            for (const ds of destCandidates) {
+                const dRoute = await fetchOSRMRoute(ds.coordinates, destCoords, 'walking');
+                const dDist = dRoute ? (dRoute.pathLength || pathLengthMeters(dRoute.path)) : ds.distance;
+                const total = pDist + dDist;
+                if (total < bestTotalWalk) {
+                    bestTotalWalk = total;
+                    bestPair = { ps, ds, pDist: Math.round(pDist), dDist: Math.round(dDist) };
+                }
+            }
+        }
+        if (bestPair && bestTotalWalk < (nearStop?.distance || 9999) + (nearDestStop?.distance || 9999)) {
+            nearStop = { name: bestPair.ps.name, coordinates: bestPair.ps.coordinates, distance: bestPair.pDist };
+            nearDestStop = { name: bestPair.ds.name, coordinates: bestPair.ds.coordinates, distance: bestPair.dDist };
+        }
+    }
 
     const transitFrom = nearStop?.coordinates || parkCoords;
     const transitTo = nearDestStop?.coordinates || destCoords;
     const stopName = nearStop?.name || 'Transit stop';
     const destStopName = nearDestStop?.name || 'Destination stop';
 
-    // Segment 2: Walk from parking to transit stop (OSRM foot, fallback interpolation on failure)
-    const walkDistMeters = distanceMeters(parkCoords, transitFrom);
+    // Segment 2: Walk from parking to transit stop (shortest OSRM foot route)
     const wResult = await fetchOSRMRoute(parkCoords, transitFrom, 'walking');
     const walkPath = wResult?.path || interpolatePoints(parkCoords, transitFrom, 4);
+    const walkDistMeters = wResult?.pathLength || pathLengthMeters(walkPath) || distanceMeters(parkCoords, transitFrom);
     const walkMinutes = wResult?.durationMin || Math.max(1, Math.round(walkDistMeters / 80));
     segments.push({
         mode: 'walking',
         path: walkPath,
         label: 'Walk',
         durationMin: walkMinutes,
-        stopName
+        stopName,
+        distanceMeters: Math.round(walkDistMeters)
     });
 
-    // Segment 3: Transit/Cycle from stop to destination area
+    // Segment 3: Transit/Cycle from stop to destination area (shortest route via alternatives)
     if (modeLabel === 'cycling') {
         const bikeResult = await fetchOSRMRoute(transitFrom, transitTo, 'cycling');
         segments.push({
@@ -365,17 +478,18 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
         });
     }
 
-    // Segment 4: Walk from dest stop to final destination (OSRM foot, fallback interpolation on failure)
-    const walkDestDist = distanceMeters(transitTo, destCoords);
+    // Segment 4: Walk from dest stop to final destination (shortest OSRM foot route)
     const wdResult = await fetchOSRMRoute(transitTo, destCoords, 'walking');
     const walkDestPath = wdResult?.path || interpolatePoints(transitTo, destCoords, 4);
-    const walkDestMinutes = wdResult?.durationMin || Math.max(1, Math.round(walkDestDist / 80));
+    const walkDestDistMeters = wdResult?.pathLength || pathLengthMeters(walkDestPath) || distanceMeters(transitTo, destCoords);
+    const walkDestMinutes = wdResult?.durationMin || Math.max(1, Math.round(walkDestDistMeters / 80));
     segments.push({
         mode: 'walking',
         path: walkDestPath,
         label: 'Walk',
         durationMin: walkDestMinutes,
-        stopName: destStopName
+        stopName: destStopName,
+        distanceMeters: Math.round(walkDestDistMeters)
     });
 
     return { segments, transitFrom, transitTo, stopName, destStopName, nearStop, nearDestStop };
@@ -464,12 +578,12 @@ app.post('/api/routes', async (req, res) => {
             destArrive.setMinutes(destArrive.getMinutes() + walkMin2);
 
             const timeline = [
-                { time: timeFormatter.format(depTime), mode: 'driving', name: 'Current Location', details: 'Drive to parking' },
-                { time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, details: 'Park car' },
-                { time: timeFormatter.format(transitDep), mode: 'walking', name: stopName, details: `Walk to ${stopName} (${walkMin1} min)` },
-                { time: timeFormatter.format(transitArr), mode: modeLabel, name: destStopName, details: `${lineName} → ${destName}` },
-                { time: timeFormatter.format(destArrive), mode: 'walking', name: destName, details: `Walk to destination (${walkMin2} min)` },
-                { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, details: 'Arrive at destination' },
+                { time: timeFormatter.format(depTime), mode: 'driving', name: 'Current Location', details: 'Drive to parking', durationMin: driveMinutes },
+                { time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, details: 'Park car', durationMin: 0 },
+                { time: timeFormatter.format(transitDep), mode: 'walking', name: stopName, details: `Walk to ${stopName} (${walkMin1} min)`, durationMin: walkMin1 },
+                { time: timeFormatter.format(transitArr), mode: modeLabel, name: destStopName, details: `${lineName} → ${destName}`, durationMin: transitMin },
+                { time: timeFormatter.format(destArrive), mode: 'walking', name: destName, details: `Walk to destination (${walkMin2} min)`, durationMin: walkMin2 },
+                { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, details: 'Arrive at destination', durationMin: 0 },
             ];
 
             return res.json({
@@ -500,10 +614,23 @@ app.post('/api/routes', async (req, res) => {
         const allOptions = [];
         const allStops = await fetchAndCacheTransitStops();
 
-        // Find nearest stops to destination for each transport mode
-        const destNearTrain = findNearestTransitStop(destCoords, allStops, ['train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn']);
-        const destNearBus = findNearestTransitStop(destCoords, allStops, ['bus']);
-        const destNearBike = findNearestTransitStop(destCoords, allStops, ['bike', 'bicycle', 'cycling']);
+        // Find top destination-area stops per mode
+        const destTopTrain = findTopTransitStops(destCoords, allStops, ['train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'], 3);
+        const destTopBus = findTopTransitStops(destCoords, allStops, ['bus'], 3);
+        const destTopBike = findTopTransitStops(destCoords, allStops, ['bike', 'bicycle', 'cycling'], 3);
+
+        // Best pairing: find (parkStop, destStop) that minimises total walking
+        function bestPairWalk(parkStops, destStops) {
+            if (parkStops.length === 0 || destStops.length === 0) return 9999;
+            let best = Infinity;
+            for (const ps of parkStops) {
+                for (const ds of destStops) {
+                    const total = ps.distance + ds.distance;
+                    if (total < best) best = total;
+                }
+            }
+            return best;
+        }
 
         for (const park of liveParkings) {
             const parkingPrice = estimateParkingPrice(park.name);
@@ -511,21 +638,17 @@ app.post('/api/routes', async (req, res) => {
             const savings = Math.max(0, DIRECT_CITY_PARKING_COST - totalCost);
             const driveMinutes = Math.max(1, Math.round(distanceMeters(startCoords || [48.7758, 9.1829], park.coordinates) / 200));
 
-            // Find nearest stops of each type to the parking
-            const nearTrain = findNearestTransitStop(park.coordinates, allStops, ['train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn']);
-            const nearBus = findNearestTransitStop(park.coordinates, allStops, ['bus']);
-            const nearBike = findNearestTransitStop(park.coordinates, allStops, ['bike', 'bicycle', 'cycling']);
+            // Find top N stops of each type near the parking
+            const nearTrain = findTopTransitStops(park.coordinates, allStops, ['train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'], 3);
+            const nearBus = findTopTransitStops(park.coordinates, allStops, ['bus'], 3);
+            const nearBike = findTopTransitStops(park.coordinates, allStops, ['bike', 'bicycle', 'cycling'], 3);
 
-            const minWalkToTransit = Math.min(
-                nearTrain?.distance || Infinity,
-                nearBus?.distance || Infinity,
-                nearBike?.distance || Infinity
-            );
+            const allNearby = [...nearTrain, ...nearBus, ...nearBike];
+            const minWalkToTransit = allNearby.length > 0 ? Math.min(...allNearby.map(s => s.distance)) : Infinity;
 
-            // Calculate total walking for each mode (park→stop + stop→dest)
-            const trainTotalWalk = (nearTrain?.distance || 9999) + (destNearTrain?.distance || 9999);
-            const busTotalWalk = (nearBus?.distance || 9999) + (destNearBus?.distance || 9999);
-            const bikeTotalWalk = (nearBike?.distance || 9999) + (destNearBike?.distance || 9999);
+            const trainTotalWalk = bestPairWalk(nearTrain, destTopTrain);
+            const busTotalWalk = bestPairWalk(nearBus, destTopBus);
+            const bikeTotalWalk = bestPairWalk(nearBike, destTopBike);
             const bestTotalWalk = Math.min(trainTotalWalk, busTotalWalk, bikeTotalWalk);
 
             // Determine which mode gives the shortest walk
@@ -533,20 +656,27 @@ app.post('/api/routes', async (req, res) => {
             if (bestTotalWalk === busTotalWalk) bestMode = 'bus';
             if (bestTotalWalk === bikeTotalWalk) bestMode = 'bicycle';
 
-            const hasTrain = nearTrain && nearTrain.distance < 1000;
-            const hasBus = nearBus && nearBus.distance < 1000;
-            const hasBike = nearBike && nearBike.distance < 1000;
+            const hasTrain = nearTrain.length > 0 && nearTrain[0].distance < MAX_WALK_PER_SEGMENT;
+            const hasBus = nearBus.length > 0 && nearBus[0].distance < MAX_WALK_PER_SEGMENT;
+            const hasBike = nearBike.length > 0 && nearBike[0].distance < MAX_WALK_PER_SEGMENT;
+
+            // Accurate walking time estimates
+            const oneWayWalkMeters = Math.round(minWalkToTransit === Infinity ? 200 : minWalkToTransit);
+            const totalWalkMeters = Math.round(bestTotalWalk === 9999 ? 500 : bestTotalWalk);
+            const walkTimeMin = Math.max(1, Math.round(oneWayWalkMeters / 80));
+            const totalWalkTimeMin = Math.max(1, Math.round(totalWalkMeters / 80));
+            const transitTimeEst = 20; // rough estimate for transit portion
 
             allOptions.push({
                 id: park.id, parkingName: park.name,
                 parkingPrice: parkingPrice.toFixed(2),
                 totalCost: totalCost.toFixed(2),
                 savings: savings.toFixed(2),
-                totalTime: `${driveMinutes + 30} min`,
-                travelDuration: '30 min',
-                walkTime: 5,
-                walkDistance: `${Math.round(minWalkToTransit === Infinity ? 200 : minWalkToTransit)}m`,
-                totalWalkEstimate: Math.round(bestTotalWalk === 9999 ? 500 : bestTotalWalk),
+                totalTime: `${driveMinutes + totalWalkTimeMin + transitTimeEst} min`,
+                travelDuration: `${transitTimeEst} min`,
+                walkTime: totalWalkTimeMin,
+                walkDistance: `${oneWayWalkMeters}m`,
+                totalWalkEstimate: totalWalkMeters,
                 bestTransitMode: bestMode,
                 lat: park.coordinates[0],
                 lng: park.coordinates[1],
@@ -555,10 +685,10 @@ app.post('/api/routes', async (req, res) => {
                 hasTrainStop: hasTrain,
                 hasBusStop: hasBus,
                 hasBikeStop: hasBike,
-                nearTrain: nearTrain ? { name: nearTrain.name, distance: nearTrain.distance } : null,
-                nearBus: nearBus ? { name: nearBus.name, distance: nearBus.distance } : null,
-                nearBike: nearBike ? { name: nearBike.name, distance: nearBike.distance } : null,
-                destStop: destNearTrain ? { name: destNearTrain.name, distance: destNearTrain.distance } : null
+                nearTrain: nearTrain.length > 0 ? nearTrain[0] : null,
+                nearBus: nearBus.length > 0 ? nearBus[0] : null,
+                nearBike: nearBike.length > 0 ? nearBike[0] : null,
+                destStop: destTopTrain.length > 0 ? destTopTrain[0] : null
             });
         }
 

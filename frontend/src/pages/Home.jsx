@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useParking } from '../context/ParkingContext';
-import { List, Car, CaretRight, House, Briefcase, Barbell, FirstAid, MagnifyingGlass, Microphone, X, MapPin, NavigationArrow, ChargingStation, DotsThreeVertical, Pencil, Bicycle } from '@phosphor-icons/react';
+import { List, Car, CaretRight, House, Briefcase, Barbell, FirstAid, MagnifyingGlass, Microphone, X, MapPin, NavigationArrow, ChargingStation, DotsThreeVertical, Pencil } from '@phosphor-icons/react';
 import L from 'leaflet';
 import './Home.css';
 
@@ -20,8 +20,6 @@ const Home = () => {
     const parkbautenLayerRef = useRef(null);
     const [sheetExpanded, setSheetExpanded] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
-    const [dataSourcesOpen, setDataSourcesOpen] = useState(false);
-    const [bikeDataOpen, setBikeDataOpen] = useState(false);
     const [darkMode, setDarkMode] = useState(false);
     const [editingLocation, setEditingLocation] = useState(false);
     const isPickingLocationRef = useRef(false);
@@ -226,12 +224,7 @@ return (
                         <div className="dropdown-item" onClick={() => { setProfileModalOpen(true); setSettingsOpen(false); }}>
                             👤 User Profile Options
                         </div>
-                        <div className="dropdown-item" onClick={() => { setDataSourcesOpen(true); setSettingsOpen(false); }}>
-                            📊 Data Sources & Coverage
-                        </div>
-                        <div className="dropdown-item" onClick={() => { setBikeDataOpen(true); setSettingsOpen(false); }}>
-                            🚲 Bicycle Parking Data
-                        </div>
+
                     </div>
                 )}
             </div>
@@ -387,165 +380,8 @@ return (
             </div>
         )}
 
-        {/* Data Sources Modal */}
-        {dataSourcesOpen && (
-            <div className="parking-sheet-overlay visible" onClick={() => setDataSourcesOpen(false)} style={{ zIndex: 100, background: 'rgba(0,0,0,0.5)' }}>
-                <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{ padding: '2rem', height: '85vh', bottom: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                        <h3 style={{ margin: 0 }}>Data Sources & Coverage</h3>
-                        <button className="icon-btn sheet-close" onClick={() => setDataSourcesOpen(false)}><X weight="bold" /></button>
-                    </div>
 
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem', lineHeight: '1.5' }}>
-                        <p style={{ marginBottom: '0.5rem', color: 'var(--text-main)' }}><strong>Gebündelte Daten Parkplätze und Parkbauten Baden-Württemberg</strong></p>
-                        <p style={{ marginBottom: '0.5rem' }}>Dieses Datenprofil bündelt Daten zu Standorten und Echtzeit-Belegungsdaten von Parkplätzen in Baden-Württemberg. Dazu zählen Parkhäuser, Tiefgaragen, P+R-Anlagen sowie öffentliche Parkplätze.</p>
-                        <p>Für Kommunen und Infrastrukturbetreiber gelten die Datenbereitstellungspflichten der Delegierten Verordnung (EU) 2024/490.</p>
-                    </div>
 
-                    <h4 style={{ marginBottom: '0.75rem' }}>Aktuell enthaltene Anbieter</h4>
-                    <div style={{ overflowX: 'auto', marginBottom: '1.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'left' }}>
-                            <thead>
-                                <tr style={{ background: 'var(--bg-color)', borderBottom: '1px solid var(--border-color)' }}>
-                                    <th style={{ padding: '0.75rem', fontWeight: '600', color: 'var(--text-main)', whiteSpace: 'nowrap' }}>Datengeber</th>
-                                    <th style={{ padding: '0.75rem', fontWeight: '600', color: 'var(--text-main)' }}>Dynamisch</th>
-                                    <th style={{ padding: '0.75rem', fontWeight: '600', color: 'var(--text-main)' }}>Zusätzliche Infos</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {[
-                                    ['Stadt Heidelberg', 'ja', 'inkl. Sonderparkplätze, Behindertenparkplätze'],
-                                    ['Stadt Freiburg im Breisgau', 'ja', 'inkl. Sonderparkplätze, Behindertenparkplätze'],
-                                    ['Stadt Mannheim', 'ja', 'inkl. Behindertenparkplätze'],
-                                    ['Stadt Ulm', 'ja', 'inkl. Sonderparkplätze, Behindertenparkplätze'],
-                                    ['Stadt Neckarsulm', 'nein', 'inkl. Sonderparkplätze, Behindertenparkplätze'],
-                                    ['Stadt Reutlingen', 'nein', 'inkl. Behindertenparkplätze'],
-                                    ['Stadt Pforzheim', 'nein', 'inkl. Sonderparkplätze'],
-                                    ['Stadt Karlsruhe', 'ja', 'inkl. Behindertenparkplätze'],
-                                    ['Stadt Herrenberg', 'ja', 'inkl. Behindertenparkplätze'],
-                                    ['Stadt Konstanz', 'ja', 'inkl. Sonderparkplätze, Behindertenparkplätze'],
-                                    ['Stadt Buchen', 'ja', 'inkl. Behindertenparkplätze'],
-                                    ['Stadt Ellwangen', 'nein', 'inkl. Sonderparkplätze, Behindertenparkplätze'],
-                                    ['Stadt Esslingen', 'nein', 'inkl. Sonderparkplätze, Behindertenparkplätze'],
-                                    ['Gemeinde Keltern', 'nein', 'inkl. Sonderparkplätze'],
-                                    ['Stadt Friedrichshafen', 'ja', 'Behindertenparkplätze'],
-                                    ['Stadt Stuttgart', 'ja', 'inkl. Sonderparkplätze, Behindertenparkplätze'],
-                                    ['Stadt Aalen', 'ja', 'inkl. Behindertenparkplätze'],
-                                    ['Stadt Sachsenheim', 'nein', 'aus Park.Raum.Check'],
-                                    ['Stadt Singen', 'nein', 'inkl. Sonderparkplätze, Behindertenparkplätze'],
-                                    ['Stadtwerke Heilbronn', 'ja', '-'],
-                                    ['Verkehrsverbund Rhein-Neckar', 'ja', '-'],
-                                    ['DB BahnPark GmbH', 'nein', 'inkl. Sonderparkplätze'],
-                                    ['PBW', 'ja', 'inkl. Sonderparkplätze'],
-                                    ['APCOA Group', 'nein', 'Deutschlandweit, inkl. Sonderparkplätze'],
-                                    ['GOLDBECK Parking Services', 'nein', '-'],
-                                    ['PARK SERVICE HÜFNER', 'nein', 'inkl. Sonderparkplätze'],
-                                    ['B+B Parkhaus', 'nein', 'inkl. Sonderparkplätze'],
-                                    ['Sensade', 'ja', 'inkl. Sonderparkplätze'],
-                                    ['Verband Region Stuttgart', 'nein', 'inkl. Sonderparkplätze'],
-                                    ['Barrierefreie Reisekette', 'nein', 'inkl. Sonderparkplätze'],
-                                    ['Parken und Mitfahren', 'nein', '-'],
-                                    ['P+R-Anlagen (VRN)', 'ja', 'inkl. Sonderparkplätze'],
-                                    ['P+R-Anlagen (opentransport)', 'nein', 'inkl. Sonderparkplätze']
-                                ].map((row, i) => (
-                                    <tr key={i} style={{ borderBottom: '1px solid var(--border-color)', background: i % 2 === 0 ? 'var(--surface)' : 'var(--bg-color)' }}>
-                                        <td style={{ padding: '0.5rem 0.75rem', color: 'var(--text-main)', fontWeight: '500', whiteSpace: 'nowrap' }}>{row[0]}</td>
-                                        <td style={{ padding: '0.5rem 0.75rem' }}>
-                                            <span style={{
-                                                background: row[1] === 'ja' ? 'rgba(34,197,94,0.1)' : 'rgba(244,63,94,0.1)',
-                                                color: row[1] === 'ja' ? 'var(--success)' : 'var(--primary)',
-                                                padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold'
-                                            }}>{row[1]}</span>
-                                        </td>
-                                        <td style={{ padding: '0.5rem 0.75rem', color: 'var(--text-muted)' }}>{row[2]}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <h4 style={{ marginBottom: '0.5rem' }}>Open Data Access</h4>
-                    <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', marginBottom: '1.5rem' }}>
-                        Die Daten sind offen verfügbar und können über die ParkAPI (MobiData BW) genutzt werden.
-                        <br /><code style={{ background: 'var(--bg-color)', padding: '2px 4px', borderRadius: '4px', wordBreak: 'break-all' }}>https://api.mobidata-bw.de/park-api/api/public/v3/parking-sites</code>
-                    </p>
-                </div>
-            </div>
-        )}
-
-        {/* Bike Data Sources Modal */}
-        {bikeDataOpen && (
-            <div className="parking-sheet-overlay visible" onClick={() => setBikeDataOpen(false)} style={{ zIndex: 100, background: 'rgba(0,0,0,0.5)' }}>
-                <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{ padding: '2rem', height: '85vh', bottom: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                            <div style={{ background: 'rgba(59,130,246,0.12)', borderRadius: '50%', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <Bicycle weight="fill" size={20} style={{ color: 'var(--secondary)' }} />
-                            </div>
-                            <h3 style={{ margin: 0 }}>Bicycle Parking Data</h3>
-                        </div>
-                        <button className="icon-btn sheet-close" onClick={() => setBikeDataOpen(false)}><X weight="bold" /></button>
-                    </div>
-
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1.5rem', lineHeight: '1.5' }}>
-                        <p style={{ marginBottom: '0.5rem', color: 'var(--text-main)' }}><strong>Gebündelte Daten Fahrradabstellanlagen Baden-Württemberg</strong></p>
-                        <p style={{ marginBottom: '0.5rem' }}>Dieses Datenprofil bündelt Daten zu Standorten und, wenn vorhanden, Echtzeit-Belegungsdaten von Fahrradabstellanlagen in Baden-Württemberg.</p>
-                        <p>Für Kommunen und Infrastrukturbetreiber gelten die Datenbereitstellungspflichten der Delegierten Verordnung (EU) 2024/490. Statische Daten sind bis zum 01.12.2024 und dynamische Daten bis zum 01.12.2026 bereitzustellen.</p>
-                    </div>
-
-                    <h4 style={{ marginBottom: '0.75rem' }}>Aktuell enthaltene Anbieter</h4>
-                    <div style={{ overflowX: 'auto', marginBottom: '1.5rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.75rem', textAlign: 'left' }}>
-                            <thead>
-                                <tr style={{ background: 'var(--bg-color)', borderBottom: '1px solid var(--border-color)' }}>
-                                    <th style={{ padding: '0.75rem', fontWeight: '600', color: 'var(--text-main)', whiteSpace: 'nowrap' }}>Datengeber</th>
-                                    <th style={{ padding: '0.75rem', fontWeight: '600', color: 'var(--text-main)' }}>Dynamisch</th>
-                                    <th style={{ padding: '0.75rem', fontWeight: '600', color: 'var(--text-main)' }}>Zusätzliche Infos</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {[
-                                    ['Stadt Karlsruhe', 'nein', 'Fahrradabstellanlagen'],
-                                    ['Stadt Konstanz', 'nein', 'Fahrradabstellanlagen'],
-                                    ['Stadt Neckarsulm', 'nein', 'Fahrradbügeldaten'],
-                                    ['Stadt Reutlingen', 'nein', 'Fahrradabstellanlagen'],
-                                    ['Stadt Pforzheim', 'nein', 'Fahrradabstellanlagen'],
-                                    ['Stadt Herrenberg', 'nein', 'Fahrradabstellanlagen'],
-                                    ['VELOBRIX', 'nein', 'Fahrradabstellanlagen'],
-                                    ['Firma Kienzler', 'ja', 'Fahrradgaragen'],
-                                    ['RadVIS BW', 'nein', 'Fahrradabstellanlagen'],
-                                    ['Barrierefreie Reisekette', 'nein', 'Fahrradabstellanlagen an ÖPNV- & SPNV-Haltestellen'],
-                                    ['VRN-Gebiet', 'ja', 'Fahrradabstellanlagen']
-                                ].map((row, i) => (
-                                    <tr key={i} style={{ borderBottom: '1px solid var(--border-color)', background: i % 2 === 0 ? 'var(--surface)' : 'var(--bg-color)' }}>
-                                        <td style={{ padding: '0.5rem 0.75rem', color: 'var(--text-main)', fontWeight: '500', whiteSpace: 'nowrap' }}>{row[0]}</td>
-                                        <td style={{ padding: '0.5rem 0.75rem' }}>
-                                            <span style={{
-                                                background: row[1] === 'ja' ? 'rgba(34,197,94,0.1)' : 'rgba(59,130,246,0.1)',
-                                                color: row[1] === 'ja' ? 'var(--success)' : 'var(--secondary)',
-                                                padding: '2px 6px', borderRadius: '4px', fontWeight: 'bold'
-                                            }}>{row[1]}</span>
-                                        </td>
-                                        <td style={{ padding: '0.5rem 0.75rem', color: 'var(--text-muted)' }}>{row[2]}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <div style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', borderRadius: 'var(--radius-md)', padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-                        <p style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--secondary)', marginBottom: '0.25rem' }}>💡 API Tip</p>
-                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: 0 }}>Use <code style={{ background: 'var(--bg-color)', padding: '1px 4px', borderRadius: '3px' }}>purpose=BIKE</code> to filter only bicycle parking spots.</p>
-                    </div>
-
-                    <h4 style={{ marginBottom: '0.5rem' }}>Open Data Access</h4>
-                    <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-                        Die Daten sind offen verfügbar und können über die ParkAPI (MobiData BW) genutzt werden.
-                        <br /><code style={{ background: 'var(--bg-color)', padding: '2px 4px', borderRadius: '4px', wordBreak: 'break-all', display: 'block', marginTop: '0.4rem' }}>https://api.mobidata-bw.de/park-api/api/public/v3/parking-sites?purpose=BIKE</code>
-                    </p>
-                </div>
-            </div>
-        )}
     </div>
 );
 };

@@ -159,25 +159,24 @@ const Results = () => {
                 if (!seg.path || seg.path.length < 2) return;
                 seg.path.forEach(pt => bounds.extend(pt));
 
-                let modeColor, modeKey;
-                if (mode === 'driving') { modeColor = '#000000'; modeKey = 'driving'; }
-                else if (mode === 'walking') { modeColor = '#22c55e'; modeKey = 'walking'; }
-                else if (mode === 'transit' || mode === 'train') { modeColor = '#f43f5e'; modeKey = 'train'; }
-                else if (mode === 'bus') { modeColor = '#3b82f6'; modeKey = 'bus'; }
-                else if (mode === 'cycling') { modeColor = '#22c55e'; modeKey = 'cycling'; }
+                let modeColor, modeKey, glowColor, lineWeight;
+                if (mode === 'driving') { modeColor = '#1e293b'; modeKey = 'driving'; glowColor = 'rgba(30,41,59,0.25)'; lineWeight = 6; }
+                else if (mode === 'walking') { modeColor = '#16a34a'; modeKey = 'walking'; glowColor = 'rgba(22,163,74,0.2)'; lineWeight = 5; }
+                else if (mode === 'transit' || mode === 'train') { modeColor = '#e11d48'; modeKey = 'train'; glowColor = 'rgba(225,29,72,0.2)'; lineWeight = 6; }
+                else if (mode === 'bus') { modeColor = '#2563eb'; modeKey = 'bus'; glowColor = 'rgba(37,99,235,0.2)'; lineWeight = 6; }
+                else if (mode === 'cycling') { modeColor = '#16a34a'; modeKey = 'cycling'; glowColor = 'rgba(22,163,74,0.2)'; lineWeight = 5; }
 
-                if (mode === 'driving') {
-                    const shadow = L.polyline(seg.path, {
-                        color: 'white', weight: 10, opacity: 0.3,
-                        lineCap: 'round', lineJoin: 'round'
-                    }).addTo(map);
-                    layers.push(shadow);
-                }
+                // Glow/shadow layer behind the main line
+                const glow = L.polyline(seg.path, {
+                    color: glowColor || modeColor, weight: lineWeight + 8, opacity: 0.35,
+                    lineCap: 'round', lineJoin: 'round'
+                }).addTo(map);
+                layers.push(glow);
 
                 if (modeColor) {
-                    const dashOpts = mode === 'walking' ? { dashArray: '8, 10' } : {};
+                    const dashOpts = mode === 'walking' ? { dashArray: '6, 8' } : {};
                     const poly = L.polyline(seg.path, {
-                        color: modeColor, weight: mode === 'walking' ? 4 : 5, opacity: 0.85,
+                        color: modeColor, weight: lineWeight, opacity: 0.9,
                         lineCap: 'round', lineJoin: 'round', ...dashOpts
                     }).addTo(map);
                     layers.push(poly);
@@ -190,19 +189,16 @@ const Results = () => {
                     }).addTo(map);
                 }
 
-                // Label at midpoint
+                // Label at midpoint with icon + duration
                 const midIdx = Math.floor(seg.path.length / 2);
-                let label = `${seg.durationMin || 15} min`;
-                if (mode === 'driving') label = `Drive • ${label}`;
-                else if (mode === 'walking') label = `Walk • ${label}`;
-                else if (mode === 'cycling') label = `Cycle • ${label}`;
-                else if (mode === 'bus' || mode === 'transit' || mode === 'train') label = `${seg.label || 'Transit'} • ${label}`;
+                const svgIcon = iconSvgCache.current[modeKey] || '';
+                const labelHtml = `<div class="label-inner"><span class="label-icon">${svgIcon}</span><span class="label-duration">${seg.durationMin || 15} min</span></div>`;
 
                 L.marker(seg.path[midIdx], {
                     icon: L.divIcon({
                         className: 'route-label-node',
-                        html: `<div class="label-inner">${label}</div>`,
-                        iconSize: [90, 22]
+                        html: labelHtml,
+                        iconSize: [80, 24]
                     })
                 }).addTo(map);
             });
@@ -251,15 +247,15 @@ const Results = () => {
     };
 
     const renderIcon = (mode) => {
-        const commonProps = { weight: 'fill', size: 16, color: '#fff' };
-        if (mode === 'driving') return <span className="node driving"><Car {...commonProps} /></span>;
-        if (mode === 'parking') return <span className="node parking"><span style={{fontWeight:'bold',fontSize:13}}>P</span></span>;
-        if (mode === 'transit' || mode === 'train') return <span className="node train"><Train {...commonProps} /></span>;
-        if (mode === 'bus') return <span className="node bus"><Bus {...commonProps} /></span>;
-        if (mode === 'cycling') return <span className="node cycling"><Bicycle {...commonProps} /></span>;
-        if (mode === 'walking') return <span className="node walking"><PersonSimpleWalk {...commonProps} /></span>;
-        if (mode === 'destination') return <MapPin weight="fill" style={{color: '#3b82f6'}} />;
-        return <PersonSimpleWalk weight="fill" />;
+        const commonProps = { weight: 'fill', size: 20 };
+        if (mode === 'driving') return <Car {...commonProps} color="#000000" />;
+        if (mode === 'parking') return <span style={{fontWeight:'bold',fontSize:15,color:'#f43f5e'}}>P</span>;
+        if (mode === 'transit' || mode === 'train') return <Train {...commonProps} color="#f43f5e" />;
+        if (mode === 'bus') return <Bus {...commonProps} color="#3b82f6" />;
+        if (mode === 'cycling') return <Bicycle {...commonProps} color="#22c55e" />;
+        if (mode === 'walking') return <PersonSimpleWalk {...commonProps} color="#22c55e" />;
+        if (mode === 'destination') return <MapPin weight="fill" size={20} color="#3b82f6" />;
+        return <PersonSimpleWalk weight="fill" size={20} />;
     };
 
     // Hidden icon renderer for Leaflet map markers
@@ -392,7 +388,10 @@ const Results = () => {
                                             <div className="timeline-item" key={i}>
                                                 <div className="time">{leg.time}</div>
                                                 <div className="node-col">
-                                                    <div className={`node ${leg.mode}`}>{renderIcon(leg.mode)}</div>
+                                                    <div className="step-icon">
+                                                        {renderIcon(leg.mode)}
+                                                        {leg.durationMin > 0 && <span className={`duration-badge ${leg.mode}`}>{leg.durationMin} min</span>}
+                                                    </div>
                                                     {i !== routeData.timeline.length - 1 && <div className={`line ${leg.mode}-line`}></div>}
                                                 </div>
                                                 <div className="details">
