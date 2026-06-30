@@ -59,7 +59,7 @@ async function fetchAndCacheParking() {
   try {
     const response = await axios.get(MOBIDATA_PARK_API, {
       headers: { 'Accept': 'application/json' },
-      timeout: 10000
+      timeout: 3000
     });
     const items = response.data?.items || [];
     const processed = items
@@ -218,6 +218,14 @@ function interpolatePoints(from, to, count = 6) {
 
 // OSRM route cache (in-memory)
 const osrmCache = new Map();
+const OSRM_CACHE_MAX = 100;
+function setOsrmCache(key, value) {
+    if (osrmCache.size >= OSRM_CACHE_MAX) {
+        const first = osrmCache.keys().next().value;
+        if (first) osrmCache.delete(first);
+    }
+    osrmCache.set(key, value);
+}
 
 async function fetchOSRMRoute(from, to, profile = 'driving') {
     const key = `${from[0].toFixed(5)},${from[1].toFixed(5)}-${to[0].toFixed(5)},${to[1].toFixed(5)}-${profile}`;
@@ -227,7 +235,7 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
     const url = `https://router.project-osrm.org/route/v1/${profileMap[profile] || 'driving'}/${from[1]},${from[0]};${to[1]},${to[0]}?geometries=geojson&overview=full&steps=false&alternatives=true`;
 
     try {
-        const res = await axios.get(url, { timeout: 8000 });
+        const res = await axios.get(url, { timeout: 1500 });
         if (res.data?.code === 'Ok' && res.data?.routes?.length > 0) {
             let bestRoute = res.data.routes[0];
             let bestPathLength = Infinity;
@@ -250,7 +258,7 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
             const path = simplifyPath(fixedPath);
             const durationMin = Math.max(1, Math.round(bestRoute.duration / 60));
             const result = { path, durationMin, pathLength: Math.round(bestPathLength) };
-            osrmCache.set(key, result);
+            setOsrmCache(key, result);
             return result;
         }
     } catch {}
@@ -268,12 +276,12 @@ async function fetchAndCacheTransitStops() {
         return transitStopsCache.data;
     }
     try {
-        const searchResponse = await axios.get(`${MOBIDATA_BASE_URL}/package_search?q=haltestellen-baden-wuerttemberg`, { timeout: 8000 });
+        const searchResponse = await axios.get(`${MOBIDATA_BASE_URL}/package_search?q=haltestellen-baden-wuerttemberg`, { timeout: 3000 });
         const dataset = searchResponse.data.result.results[0];
         if (!dataset) return transitStopsCache.data || FALLBACK_STOPS;
         const resource = dataset.resources.find(r => r.format.toLowerCase() === 'geojson' || r.format.toLowerCase() === 'json' || r.format.toLowerCase() === 'csv');
         if (!resource) return transitStopsCache.data || FALLBACK_STOPS;
-        const actualData = await axios.get(resource.url, { timeout: 30000 });
+        const actualData = await axios.get(resource.url, { timeout: 5000 });
         const features = actualData.data.features || actualData.data;
         const allStops = (features || []).map(f => ({
             name: f.properties?.name || f.properties?.title || 'Unknown',
@@ -325,52 +333,33 @@ function findTopTransitStops(coords, stops, modeKeywords, count = 3) {
 // Considers top N candidates by Haversine, fetches OSRM walking routes for each,
 // and picks the one with the shortest actual walking distance.
 // Returns null if no candidate is within maxWalkMeters.
-async function findNearestTransitStopByWalking(coords, stops, modeKeywords, maxCandidates = 5, maxWalkMeters = MAX_WALK_PER_SEGMENT) {
-    const scored = [];
+async function findNearestTransitStopByWalking(coords, stops, modeKeywords, maxWalkMeters = MAX_WALK_PER_SEGMENT) {
+    let best = null;
+    let bestDist = Infinity;
     for (const stop of stops) {
         const t = stop.type || '';
         const matches = modeKeywords.some(kw => t.includes(kw));
         if (!matches) continue;
-        scored.push({ stop, haversineDist: distanceMeters(coords, stop.coordinates) });
-    }
-
-    if (scored.length === 0) return null;
-
-    // Expand search if the nearest Haversine candidate is already over limit
-    scored.sort((a, b) => a.haversineDist - b.haversineDist);
-    const effectiveCandidates = scored[0].haversineDist > maxWalkMeters ? Math.min(scored.length, 10) : maxCandidates;
-    const candidates = scored.slice(0, effectiveCandidates);
-
-    let bestStop = null;
-    let bestDist = Infinity;
-
-    for (const { stop } of candidates) {
-        const route = await fetchOSRMRoute(coords, stop.coordinates, 'walking');
-        const walkDist = route ? (route.pathLength || pathLengthMeters(route.path)) : distanceMeters(coords, stop.coordinates);
-        if (walkDist > maxWalkMeters) continue;
-        if (walkDist < bestDist) {
-            bestDist = walkDist;
-            bestStop = stop;
+        const d = distanceMeters(coords, stop.coordinates);
+        if (d < bestDist && d <= maxWalkMeters) {
+            bestDist = d;
+            best = stop;
         }
     }
-
-    // If nothing within limit, take the shortest OSRM route regardless
-    if (!bestStop) {
-        for (const { stop } of candidates) {
-            const route = await fetchOSRMRoute(coords, stop.coordinates, 'walking');
-            const walkDist = route ? (route.pathLength || pathLengthMeters(route.path)) : distanceMeters(coords, stop.coordinates);
-            if (walkDist < bestDist) {
-                bestDist = walkDist;
-                bestStop = stop;
+    // If nothing within limit, take the closest regardless
+    if (!best) {
+        for (const stop of stops) {
+            const t = stop.type || '';
+            const matches = modeKeywords.some(kw => t.includes(kw));
+            if (!matches) continue;
+            const d = distanceMeters(coords, stop.coordinates);
+            if (d < bestDist) {
+                bestDist = d;
+                best = stop;
             }
         }
     }
-
-    return bestStop ? {
-        name: bestStop.name,
-        coordinates: bestStop.coordinates,
-        distance: Math.round(bestDist === Infinity ? scored[0].haversineDist : bestDist)
-    } : null;
+    return best ? { name: best.name, coordinates: best.coordinates, distance: Math.round(bestDist) } : null;
 }
 
 // Build 4-segment route: drive → walk to stop → transit/cycle → walk to dest
@@ -407,42 +396,26 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
     }
 
     // Use actual OSRM walking routes to find the truly nearest and most reasonable stops
-    let nearStop = await findNearestTransitStopByWalking(parkCoords, allStops, modeKeywords);
-    let nearDestStop = await findNearestTransitStopByWalking(destCoords, allStops, modeKeywords);
+    let [nearStop, nearDestStop] = await Promise.all([
+        findNearestTransitStopByWalking(parkCoords, allStops, modeKeywords),
+        findNearestTransitStopByWalking(destCoords, allStops, modeKeywords)
+    ]);
 
-    // If either walking distance exceeds the per-segment limit, try the top 5 stops
-    // from each side as pairs to find the combination with the lowest total walking
-    if (!nearStop || !nearDestStop || nearStop.distance > MAX_WALK_PER_SEGMENT || nearDestStop.distance > MAX_WALK_PER_SEGMENT) {
-        const parkCandidates = findTopTransitStops(parkCoords, allStops, modeKeywords, 5);
-        const destCandidates = findTopTransitStops(destCoords, allStops, modeKeywords, 5);
-        let bestPair = null;
-        let bestTotalWalk = Infinity;
-        for (const ps of parkCandidates) {
-            const pRoute = await fetchOSRMRoute(parkCoords, ps.coordinates, 'walking');
-            const pDist = pRoute ? (pRoute.pathLength || pathLengthMeters(pRoute.path)) : ps.distance;
-            for (const ds of destCandidates) {
-                const dRoute = await fetchOSRMRoute(ds.coordinates, destCoords, 'walking');
-                const dDist = dRoute ? (dRoute.pathLength || pathLengthMeters(dRoute.path)) : ds.distance;
-                const total = pDist + dDist;
-                if (total < bestTotalWalk) {
-                    bestTotalWalk = total;
-                    bestPair = { ps, ds, pDist: Math.round(pDist), dDist: Math.round(dDist) };
-                }
-            }
-        }
-        if (bestPair && bestTotalWalk < (nearStop?.distance || 9999) + (nearDestStop?.distance || 9999)) {
-            nearStop = { name: bestPair.ps.name, coordinates: bestPair.ps.coordinates, distance: bestPair.pDist };
-            nearDestStop = { name: bestPair.ds.name, coordinates: bestPair.ds.coordinates, distance: bestPair.dDist };
-        }
-    }
-
+    // Use nearest Haversine stop (OSRM walking was eliminated for speed)
     const transitFrom = nearStop?.coordinates || parkCoords;
     const transitTo = nearDestStop?.coordinates || destCoords;
     const stopName = nearStop?.name || 'Transit stop';
     const destStopName = nearDestStop?.name || 'Destination stop';
 
-    // Segment 2: Walk from parking to transit stop (shortest OSRM foot route)
-    const wResult = await fetchOSRMRoute(parkCoords, transitFrom, 'walking');
+    // Segments 2, 3, 4 are independent — run in parallel
+    const transitMode = modeLabel === 'cycling' ? 'cycling' : 'driving';
+    const [wResult, transitResult, wdResult] = await Promise.all([
+        fetchOSRMRoute(parkCoords, transitFrom, 'walking'),
+        fetchOSRMRoute(transitFrom, transitTo, transitMode),
+        fetchOSRMRoute(transitTo, destCoords, 'walking')
+    ]);
+
+    // Segment 2: Walk from parking to transit stop
     const walkPath = wResult?.path || interpolatePoints(parkCoords, transitFrom, 4);
     const walkDistMeters = wResult?.pathLength || pathLengthMeters(walkPath) || distanceMeters(parkCoords, transitFrom);
     const walkMinutes = wResult?.durationMin || Math.max(1, Math.round(walkDistMeters / 80));
@@ -455,19 +428,17 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
         distanceMeters: Math.round(walkDistMeters)
     });
 
-    // Segment 3: Transit/Cycle from stop to destination area (shortest route via alternatives)
+    // Segment 3: Transit/Cycle from stop to destination area
     if (modeLabel === 'cycling') {
-        const bikeResult = await fetchOSRMRoute(transitFrom, transitTo, 'cycling');
         segments.push({
             mode: 'cycling',
-            path: bikeResult?.path || interpolatePoints(transitFrom, transitTo, 8),
+            path: transitResult?.path || interpolatePoints(transitFrom, transitTo, 8),
             label: 'Cycle',
-            durationMin: bikeResult?.durationMin || Math.max(1, Math.round(distanceMeters(transitFrom, transitTo) / 80)),
+            durationMin: transitResult?.durationMin || Math.max(1, Math.round(distanceMeters(transitFrom, transitTo) / 80)),
             fromStop: stopName,
             toStop: destStopName
         });
     } else {
-        const transitResult = await fetchOSRMRoute(transitFrom, transitTo, 'driving');
         segments.push({
             mode: modeLabel === 'bus' ? 'bus' : 'train',
             path: transitResult?.path || interpolatePoints(transitFrom, transitTo, 6),
@@ -478,8 +449,7 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
         });
     }
 
-    // Segment 4: Walk from dest stop to final destination (shortest OSRM foot route)
-    const wdResult = await fetchOSRMRoute(transitTo, destCoords, 'walking');
+    // Segment 4: Walk from dest stop to final destination
     const walkDestPath = wdResult?.path || interpolatePoints(transitTo, destCoords, 4);
     const walkDestDistMeters = wdResult?.pathLength || pathLengthMeters(walkDestPath) || distanceMeters(transitTo, destCoords);
     const walkDestMinutes = wdResult?.durationMin || Math.max(1, Math.round(walkDestDistMeters / 80));
@@ -500,18 +470,29 @@ app.get('/api/health', (req, res) => {
 });
 
 app.post('/api/routes', async (req, res) => {
+    const ROUTE_TIMEOUT_MS = 25000;
+    let timedOut = false;
+    const routeTimer = setTimeout(() => {
+        timedOut = true;
+        if (!res.headersSent) {
+            res.status(504).json({ success: false, message: 'Request timed out. Please try again.' });
+        }
+    }, ROUTE_TIMEOUT_MS);
+
+    const clearRouteTimer = () => { if (!timedOut) clearTimeout(routeTimer); };
+
     try {
         const { destination, startCoords, arrivalTime, parkingId, transportMode, maxTimeMinutes = 120, destCoords: reqDestCoords } = req.body;
 
         let liveParkings = await getParkingSites();
         if (!liveParkings.length) {
-            return res.status(503).json({ success: false, message: 'No live parking data available' });
+            clearRouteTimer(); return res.status(503).json({ success: false, message: 'No live parking data available' });
         }
 
         if (parkingId) {
             liveParkings = liveParkings.filter(p => p.id === parkingId || p.id == parkingId);
             if (!liveParkings.length) {
-                return res.status(404).json({ success: false, message: 'Selected parking not found' });
+                clearRouteTimer(); return res.status(404).json({ success: false, message: 'Selected parking not found' });
             }
         }
 
@@ -519,7 +500,7 @@ app.post('/api/routes', async (req, res) => {
         let hafasAvailable = false;
         let client = null;
         try {
-            client = await withTimeout(getClient(), 4000);
+            client = await withTimeout(getClient(), 2000);
             hafasAvailable = true;
         } catch { hafasAvailable = false; }
 
@@ -530,7 +511,7 @@ app.post('/api/routes', async (req, res) => {
             let destStation = null;
             if (hafasAvailable) {
                 try {
-                    const destLocs = await withTimeout(client.locations(destName, { results: 1 }), 4000);
+                    const destLocs = await withTimeout(client.locations(destName, { results: 1 }), 2000);
                     if (destLocs && destLocs.length > 0) destStation = destLocs[0];
                 } catch {}
             }
@@ -586,7 +567,7 @@ app.post('/api/routes', async (req, res) => {
                 { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, details: 'Arrive at destination', durationMin: 0 },
             ];
 
-            return res.json({
+            clearRouteTimer(); return res.json({
                 success: true,
                 data: [{
                     id: park.id, parkingName: park.name,
@@ -697,8 +678,11 @@ app.post('/api/routes', async (req, res) => {
         res.json({ success: true, data: allOptions });
 
     } catch (error) {
+        clearRouteTimer();
         console.error("Error fetching route:", error);
         res.status(500).json({ success: false, error: 'Failed to calculate route' });
+    } finally {
+        clearRouteTimer();
     }
 });
 

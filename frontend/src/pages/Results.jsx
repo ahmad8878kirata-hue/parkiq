@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+const FETCH_TIMEOUT = 20000; // 20s
 import { useParking } from '../context/ParkingContext';
 import { ArrowLeft, MapPin, Car, PersonSimpleWalk, Train, Bus, Bicycle, CircleNotch, CaretLeft, Envelope, WarningCircle } from '@phosphor-icons/react';
 import SpecialOfferToast from '../components/SpecialOfferToast';
@@ -24,6 +25,7 @@ const Results = () => {
     const routeLayersRef = useRef([]);
 
     const iconSvgCache = useRef({});
+    const routeCacheRef = useRef(new Map());
     const iconRef = (name) => (el) => {
         if (el && !iconSvgCache.current[name]) {
             const svg = el.querySelector('svg');
@@ -43,8 +45,17 @@ const Results = () => {
     };
 
     const [routeOptions, setRouteOptions] = useState([]);
+    const [selectedMode, setSelectedMode] = useState('train');
+    const [sortBy, setSortBy] = useState('price');
+    const [sortOrder, setSortOrder] = useState('asc');
+    const sortedOptions = [...routeOptions]
+        .sort((a, b) => {
+            const aVal = sortBy === 'price' ? parseFloat(a.totalCost) : (parseInt(a.totalTime) || 999);
+            const bVal = sortBy === 'price' ? parseFloat(b.totalCost) : (parseInt(b.totalTime) || 999);
+            return sortOrder === 'asc' ? aVal - bVal : bVal - aVal;
+        })
+        .slice(0, 10);
     const [selectedParking, setSelectedParking] = useState(null);
-    const [selectingMode, setSelectingMode] = useState(false);
     const [routeData, setRouteData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [loadingRoute, setLoadingRoute] = useState(false);
@@ -60,6 +71,9 @@ const Results = () => {
 
     // Fetch parking options list
     useEffect(() => {
+        let cancelled = false;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
         const fetchOptions = async () => {
             setLoading(true);
             setError(null);
@@ -67,28 +81,34 @@ const Results = () => {
                 const res = await fetch(`${API_BASE}/api/routes`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ destination, startCoords, destCoords, arrivalTime, parkingId, maxTimeMinutes })
+                    body: JSON.stringify({ destination, startCoords, destCoords, arrivalTime, parkingId, maxTimeMinutes }),
+                    signal: controller.signal
                 });
+                if (!cancelled) clearTimeout(timer);
                 if (!res.ok) throw new Error(`API error: ${res.status}`);
                 const json = await res.json();
                 if (!json.success) throw new Error(json.message || 'Unknown error');
 
-                const enriched = (json.data || []).map((opt, index) => ({
-                    ...opt,
-                    category: 'Public',
-                    hasSpecialRate: index === 0 && isRegistered
-                }));
-                setRouteOptions(enriched);
-                if (isRegistered && enriched.some(o => o.hasSpecialRate)) {
-                    setTimeout(() => setShowToast(true), 1000);
+                if (!cancelled) {
+                    const enriched = (json.data || []).map((opt, index) => ({
+                        ...opt,
+                        category: 'Public',
+                        hasSpecialRate: index === 0 && isRegistered
+                    }));
+                    setRouteOptions(enriched);
+                    if (isRegistered && enriched.some(o => o.hasSpecialRate)) {
+                        setTimeout(() => setShowToast(true), 1000);
+                    }
                 }
             } catch (err) {
-                setError(err.message);
+                if (err.name === 'AbortError') return; // superseded by newer request
+                if (!cancelled) setError(err.message);
             } finally {
-                setLoading(false);
+                if (!cancelled) { clearTimeout(timer); setLoading(false); }
             }
         };
         fetchOptions();
+        return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
     }, [destination, startCoords, arrivalTime, parkingId, isRegistered]);
 
     // Init map with markers
@@ -97,6 +117,7 @@ const Results = () => {
 
         mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView(startCoords, 12);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(mapInstance.current);
+        mapInstance.current.on('click', () => setIsExpanded(false));
         setTimeout(() => mapInstance.current?.invalidateSize(), 200);
 
         const startIcon = L.divIcon({
@@ -108,38 +129,67 @@ const Results = () => {
 
     }, [loading, routeOptions]);
 
-    const handleSelectParking = (opt) => {
-        setSelectedParking(opt);
-        setSelectingMode(true);
-        setRouteData(null);
-        setIsExpanded(true);
-    };
-
-    const handleModeSelect = useCallback(async (mode) => {
-        if (!selectedParking) return;
+    const currentRouteReq = useRef(null);
+    const fetchRouteForParking = async (mode, parking) => {
+        if (!parking) return;
+        const cacheKey = `${parking.id}-${mode}`;
+        const cached = routeCacheRef.current.get(cacheKey);
+        if (cached) {
+            setRouteData(cached);
+            return;
+        }
+        currentRouteReq.current?.abort();
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+        currentRouteReq.current = controller;
         setLoadingRoute(true);
-        setSelectingMode(false);
         try {
             const res = await fetch(`${API_BASE}/api/routes`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        destination, startCoords, destCoords, arrivalTime,
-                        parkingId: selectedParking.id,
-                        transportMode: mode,
-                        maxTimeMinutes
-                    })
+                body: JSON.stringify({
+                    destination, startCoords, destCoords, arrivalTime,
+                    parkingId: parking.id,
+                    transportMode: mode,
+                    maxTimeMinutes
+                }),
+                signal: controller.signal
             });
             if (!res.ok) throw new Error(`API error: ${res.status}`);
             const json = await res.json();
             if (!json.success || !json.data?.length) throw new Error(json.message || 'No route found');
-            setRouteData(json.data[0]);
+            routeCacheRef.current.set(cacheKey, json.data[0]);
+            if (routeCacheRef.current.size > 50) {
+                const firstKey = routeCacheRef.current.keys().next().value;
+                routeCacheRef.current.delete(firstKey);
+            }
+            if (currentRouteReq.current === controller) {
+                setRouteData(json.data[0]);
+            }
         } catch (err) {
+            if (err.name === 'AbortError' || currentRouteReq.current !== controller) return;
             setError(err.message);
         } finally {
-            setLoadingRoute(false);
+            if (currentRouteReq.current === controller) {
+                clearTimeout(timer);
+                setLoadingRoute(false);
+            }
         }
-    }, [selectedParking, destination, startCoords, arrivalTime, maxTimeMinutes]);
+    };
+
+    const handleModeChange = (mode) => {
+        setSelectedMode(mode);
+        if (selectedParking) {
+            fetchRouteForParking(mode, selectedParking);
+        }
+    };
+
+    const handleSelectParking = (opt) => {
+        setSelectedParking(opt);
+        setRouteData(null);
+        setIsExpanded(true);
+        fetchRouteForParking(selectedMode, opt);
+    };
 
     // Draw route on map
     useEffect(() => {
@@ -166,7 +216,6 @@ const Results = () => {
                 else if (mode === 'bus') { modeColor = '#2563eb'; modeKey = 'bus'; glowColor = 'rgba(37,99,235,0.2)'; lineWeight = 6; }
                 else if (mode === 'cycling') { modeColor = '#16a34a'; modeKey = 'cycling'; glowColor = 'rgba(22,163,74,0.2)'; lineWeight = 5; }
 
-                // Glow/shadow layer behind the main line
                 const glow = L.polyline(seg.path, {
                     color: glowColor || modeColor, weight: lineWeight + 8, opacity: 0.35,
                     lineCap: 'round', lineJoin: 'round'
@@ -181,7 +230,6 @@ const Results = () => {
                     }).addTo(map);
                     layers.push(poly);
 
-                    // Phosphor icon at segment start
                     const svgContent = iconSvgCache.current[modeKey] || '';
                     const iconHtml = `<div class="route-icon-node ${modeKey}">${svgContent}</div>`;
                     L.marker(seg.path[0], {
@@ -189,7 +237,6 @@ const Results = () => {
                     }).addTo(map);
                 }
 
-                // Label at midpoint with icon + duration
                 const midIdx = Math.floor(seg.path.length / 2);
                 const svgIcon = iconSvgCache.current[modeKey] || '';
                 const labelHtml = `<div class="label-inner"><span class="label-icon">${svgIcon}</span><span class="label-duration">${seg.durationMin || 15} min</span></div>`;
@@ -204,7 +251,6 @@ const Results = () => {
             });
         }
 
-        // Parking marker (clean "P")
         const parkMarker = L.marker([routeData.lat, routeData.lng], {
             icon: L.divIcon({
                 className: 'map-node parking-node',
@@ -215,7 +261,6 @@ const Results = () => {
         layers.push(parkMarker);
         bounds.extend([routeData.lat, routeData.lng]);
 
-        // Destination marker
         const finalDestCoords = destCoords || (routeData.segments?.length > 0
             ? routeData.segments[routeData.segments.length - 1].path.slice(-1)[0]
             : null);
@@ -258,7 +303,6 @@ const Results = () => {
         return <PersonSimpleWalk weight="fill" size={20} />;
     };
 
-    // Hidden icon renderer for Leaflet map markers
     const hiddenIcons = (
         <div style={{position:'absolute',left:-9999,top:-9999,opacity:0,pointerEvents:'none',width:0,height:0,overflow:'hidden'}}>
             <span ref={iconRef('driving')}><Car weight="fill" size={16} /></span>
@@ -266,6 +310,21 @@ const Results = () => {
             <span ref={iconRef('train')}><Train weight="fill" size={16} /></span>
             <span ref={iconRef('bus')}><Bus weight="fill" size={16} /></span>
             <span ref={iconRef('cycling')}><Bicycle weight="fill" size={16} /></span>
+        </div>
+    );
+
+    const renderModeTabs = () => (
+        <div className="mode-tabs">
+            {Object.entries(MODE_META).map(([mode, meta]) => (
+                <button
+                    key={mode}
+                    className={`mode-tab ${selectedMode === mode ? 'active' : ''}`}
+                    onClick={() => handleModeChange(mode)}
+                >
+                    <span className="mode-tab-icon">{meta.icon}</span>
+                    <span className="mode-tab-label">{meta.label}</span>
+                </button>
+            ))}
         </div>
     );
 
@@ -290,10 +349,13 @@ const Results = () => {
                 <>
                     <div ref={mapRef} className="main-map" />
 
-                    <div className="top-nav map-top-nav" style={{display: 'flex', justifyContent: 'space-between', width: '100%'}}>
-                        <button className="icon-btn bg-white shadow-sm" onClick={() => navigate(-1)}><ArrowLeft weight="bold" /></button>
-                        <div className="destination-pill bg-white shadow-sm"><MapPin weight="fill" className="text-primary" /><span>{destination}</span></div>
-                        <button className="icon-btn bg-white shadow-sm" onClick={() => navigate('/home')}><ArrowLeft weight="bold" style={{transform: 'rotate(180deg)'}} /></button>
+                    <div className="results-top">
+                        <div className="results-top-row">
+                            <button className="icon-btn bg-white shadow-sm" onClick={() => navigate(-1)}><ArrowLeft weight="bold" /></button>
+                            <div className="destination-pill bg-white shadow-sm"><MapPin weight="fill" className="text-primary" /><span>{destination}</span></div>
+                            <div style={{width: '40px'}}></div>
+                        </div>
+                        {renderModeTabs()}
                     </div>
 
                     <div className={`bottom-sheet ${isExpanded ? 'expanded' : ''}`}>
@@ -310,11 +372,24 @@ const Results = () => {
                         </div>
                         <div className="sheet-scrollable">
 
-                            {/* Step 1: Options list */}
+                            {/* Options list */}
                             {!selectedParking && !loadingRoute && !routeData && (
                                 <div className="options-list">
-                                    <h4 className="text-muted text-sm font-semibold mb-3">SELECT PARKING</h4>
-                                    {routeOptions.map((opt, idx) => (
+                                    <div className="flex-between mb-3">
+                                        <h4 className="text-muted text-sm font-semibold">SELECT PARKING</h4>
+                                        <div className="sort-bar">
+                                            <button className={`sort-btn ${sortBy === 'price' ? 'active' : ''}`} onClick={() => { if (sortBy === 'price') setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); else { setSortBy('price'); setSortOrder('asc'); } }}>
+                                                Price {sortBy === 'price' ? (sortOrder === 'asc' ? '↑' : '↓') : ''}
+                                            </button>
+                                            <button className={`sort-btn ${sortBy === 'time' ? 'active' : ''}`} onClick={() => { if (sortBy === 'time') setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); else { setSortBy('time'); setSortOrder('asc'); } }}>
+                                                Time {sortBy === 'time' ? (sortOrder === 'asc' ? '↑' : '↓') : ''}
+                                            </button>
+                                        </div>
+                                    </div>
+                                    {sortedOptions.length === 0 && routeOptions.length > 0 && (
+                                        <p className="text-muted text-sm text-center">No matching options</p>
+                                    )}
+                                    {sortedOptions.map((opt, idx) => (
                                         <div key={idx} className={`option-card ${opt.hasSpecialRate ? 'special-card' : ''}`} onClick={() => handleSelectParking(opt)}>
                                             <div className="flex-between mb-2">
                                                 <div className="font-bold">{opt.parkingName}<span className={`category-tag ${opt.category?.toLowerCase() || 'public'}`}>{opt.category || 'Public'}</span></div>
@@ -333,37 +408,9 @@ const Results = () => {
                                             </div>
                                         </div>
                                     ))}
-                                </div>
-                            )}
-
-                            {/* Step 2: Mode selection */}
-                            {selectedParking && selectingMode && !loadingRoute && (
-                                <div>
-                                    <div className="route-header">
-                                        <button className="icon-btn mb-2" onClick={() => { setSelectedParking(null); setSelectingMode(false); }}><CaretLeft weight="bold" /></button>
-                                        <h3 className="text-center font-bold">{selectedParking.parkingName}</h3>
-                                        <p className="text-center text-muted text-sm mb-4">Choose your transport mode</p>
-                                    </div>
-                                    <div className="mode-selector">
-                                        {Object.entries(MODE_META).map(([mode, meta]) => {
-                                            const isAvailable = mode === 'train' ? selectedParking.hasTrainStop
-                                                : mode === 'bus' ? selectedParking.hasBusStop
-                                                : selectedParking.hasBikeStop;
-                                            return (
-                                                <div
-                                                    key={mode}
-                                                    className={`mode-btn ${!isAvailable ? 'disabled' : ''}`}
-                                                    onClick={() => isAvailable && handleModeSelect(mode)}
-                                                >
-                                                    <div className="mode-icon" style={{ borderColor: meta.color }}>
-                                                        <span style={{fontSize: '1.5rem'}}>{meta.icon}</span>
-                                                    </div>
-                                                    <div className="mode-label">{meta.label}</div>
-                                                    {!isAvailable && <div className="mode-unavailable">N/A</div>}
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
+                                    {routeOptions.length > 10 && (
+                                        <p className="text-muted text-xs text-center mt-2">Showing top 10 of {routeOptions.length} options</p>
+                                    )}
                                 </div>
                             )}
 
@@ -375,13 +422,13 @@ const Results = () => {
                                 </div>
                             )}
 
-                            {/* Step 3: Route display */}
-                            {routeData && !selectingMode && !loadingRoute && (
+                            {/* Route display */}
+                            {routeData && !loadingRoute && (
                                 <div>
                                     <div className="route-header">
-                                        <button className="icon-btn mb-2" onClick={() => { setRouteData(null); setSelectedParking(null); setSelectingMode(false); }}><CaretLeft weight="bold" /></button>
+                                        <button className="icon-btn mb-2" onClick={() => { setRouteData(null); setSelectedParking(null); }}><CaretLeft weight="bold" /></button>
                                         <h3 className="text-center font-bold text-xl">{routeData.totalTime} total trip</h3>
-                                        <p className="text-center text-muted text-sm mb-4">Route Details</p>
+                                        <p className="text-center text-muted text-sm mb-4">{selectedParking?.parkingName} — {selectedMode.charAt(0).toUpperCase() + selectedMode.slice(1)}</p>
                                     </div>
                                     <div className="route-timeline">
                                         {routeData.timeline && routeData.timeline.map((leg, i) => (

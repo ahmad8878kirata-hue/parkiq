@@ -11,12 +11,13 @@ const Search = () => {
     const initialCoords = locationState.state?.startCoords || [48.7758, 9.1829];
     const initialDest = locationState.state?.destination || '';
     const initialDestCoords = locationState.state?.destCoords || null;
-    const [destination, setDestination] = useState(initialDest || 'Stuttgart Zentrum');
+    const [destination, setDestination] = useState(initialDest || '');
     const [startLocation, setStartLocation] = useState(initialLocation);
     const [startCoords, setStartCoords] = useState(initialCoords);
     const [activeDay, setActiveDay] = useState(28);
     const [time, setTime] = useState('08:30');
     const [showDate, setShowDate] = useState(false);
+    const [isDeparture, setIsDeparture] = useState(true);
 
     const [loadingLocation, setLoadingLocation] = useState(false);
 
@@ -28,7 +29,6 @@ const Search = () => {
         let finalDestCoords = initialDestCoords;
 
         try {
-            // If no pre-set destination coords, geocode the destination name
             if (!finalDestCoords) {
                 const destRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(destination)}&limit=1`);
                 const destData = await destRes.json();
@@ -38,7 +38,6 @@ const Search = () => {
                 }
             }
 
-            // Find closest match for start location
             if (startLocation && startLocation !== 'Stuttgart' && startLocation !== 'Your Location') {
                 const startRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(startLocation)}&limit=1`);
                 const startData = await startRes.json();
@@ -75,7 +74,6 @@ const Search = () => {
 
     const renderDays = () => {
         const days = [];
-        // Mock April 2026 days
         for (let i = 30; i <= 31; i++) days.push(<div key={`prev-${i}`} className="day disabled">{i}</div>);
         for (let i = 1; i <= 30; i++) {
             days.push(
@@ -104,43 +102,40 @@ const Search = () => {
                 </div>
                 
                 <div className="mb-4">
-                    <label style={{display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: '600'}}>Starting Point</label>
                     <input 
                         type="text" 
+                        placeholder="Starting Point"
                         value={startLocation} 
                         onChange={(e) => setStartLocation(e.target.value)}
-                        style={{width: '100%', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1.5px solid var(--border-color)', outline: 'none', fontFamily: 'var(--font-body)', fontSize: '1rem', background: 'var(--surface)', color: 'var(--text-main)', marginBottom: '1rem'}}
+                        className="search-input"
                     />
-                    <label style={{display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.875rem', fontWeight: '600'}}>Destination</label>
                     <input 
                         type="text" 
                         placeholder="Where are you going?"
                         value={destination} 
                         onChange={(e) => setDestination(e.target.value)}
                         autoFocus
-                        style={{width: '100%', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1.5px solid var(--primary-light)', outline: 'none', fontFamily: 'var(--font-body)', fontSize: '1rem', background: 'var(--surface)', color: 'var(--text-main)', boxShadow: '0 4px 12px rgba(244, 63, 94, 0.1)', marginBottom: '1rem'}}
+                        className="search-input search-input-dest"
                     />
-
                 </div>
                 
                 {!showDate ? (
                     <button 
-                        className="btn btn-outline w-100 mb-4" 
+                        className="btn btn-outline date-btn" 
                         onClick={() => setShowDate(true)}
-                        style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem' }}
                     >
-                        <CalendarBlank weight="bold" size={20} />
+                        <CalendarBlank weight="bold" size={18} />
                         <span>Set Date & Time</span>
                     </button>
                 ) : (
                     <div className="toggle-group mb-4">
-                        <button className="toggle-btn active">Departure</button>
-                        <button className="toggle-btn">Arrival</button>
+                        <button className={`toggle-btn ${isDeparture ? 'active' : ''}`} onClick={() => setIsDeparture(true)}>Departure</button>
+                        <button className={`toggle-btn ${!isDeparture ? 'active' : ''}`} onClick={() => setIsDeparture(false)}>Arrival</button>
                     </div>
                 )}
                 
                 {showDate && (
-                    <>
+                    <div className="datetime-content">
                         <div className="calendar-header">
                             <button className="icon-btn text-muted">
                                 <CaretLeft weight="bold" /> Mar
@@ -164,13 +159,13 @@ const Search = () => {
                             <button className="icon-btn text-primary" onClick={() => adjustTime(15)}>
                                 <Plus weight="bold" />
                             </button>
-                            <button className="btn btn-outline ml-auto" onClick={() => {
+                            <button className="btn btn-outline ml-auto now-btn" onClick={() => {
                                 const now = new Date();
                                 setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
                                 setActiveDay(now.getDate());
                             }}>Now</button>
                         </div>
-                    </>
+                    </div>
                 )}
                 
                 {selectedParking && (

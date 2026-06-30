@@ -2,19 +2,52 @@
   position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 0;
 }
 
-.map-top-nav {
-  background: transparent; pointer-events: none;
-  display: flex; justify-content: space-between;
-  padding: 1rem;
-  z-index: 20;
+.results-top {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 20;
+  display: flex; flex-direction: column; gap: 0.5rem;
+  padding: 0.75rem 1rem 0.5rem;
+  pointer-events: none;
 }
-.map-top-nav > * { pointer-events: auto; }
+.results-top > * { pointer-events: auto; }
+.results-top-row {
+  display: flex; justify-content: space-between; align-items: center;
+  width: 100%;
+}
 .bg-white { background: var(--surface) !important; }
 .destination-pill {
   display: flex; align-items: center; gap: 0.5rem;
   padding: 0.5rem 1rem; border-radius: var(--radius-full);
   font-weight: 600; font-size: 0.875rem;
 }
+
+.mode-tabs {
+  display: flex; gap: 0.5rem; justify-content: center;
+  padding: 0.25rem;
+  background: rgba(255,255,255,0.9);
+  backdrop-filter: blur(8px);
+  border-radius: var(--radius-full);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+}
+body.dark-mode .mode-tabs {
+  background: rgba(30,30,30,0.9);
+}
+.mode-tab {
+  display: flex; align-items: center; gap: 0.3rem;
+  padding: 0.4rem 0.8rem; border: none; border-radius: var(--radius-full);
+  background: transparent; cursor: pointer;
+  font-family: var(--font-body); font-weight: 600;
+  font-size: 0.8rem; color: var(--text-muted);
+  transition: var(--transition);
+}
+.mode-tab.active {
+  background: var(--text-main); color: white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+body.dark-mode .mode-tab.active {
+  background: var(--primary); color: white;
+}
+.mode-tab-icon { font-size: 1.1rem; line-height: 1; }
+.mode-tab-label { line-height: 1; }
 
 .filters-scroll {
   position: absolute; top: 4.5rem; left: 0; width: 100%;
@@ -192,6 +225,22 @@
 .filter-chip.special {
     box-shadow: 0 4px 10px var(--primary-glow);
     border-color: var(--primary);
+}
+
+.sort-bar {
+  display: flex; gap: 0.4rem; align-items: center;
+}
+.sort-btn {
+  font-family: var(--font-body); font-size: 0.75rem; font-weight: 700;
+  padding: 0.3rem 0.7rem; border-radius: var(--radius-full);
+  border: 1.5px solid var(--border-color); background: transparent;
+  color: var(--text-muted); cursor: pointer; transition: var(--transition);
+}
+.sort-btn.active {
+  background: var(--text-main); color: white; border-color: var(--text-main);
+}
+body.dark-mode .sort-btn.active {
+  background: var(--primary); color: white; border-color: var(--primary);
 }
 
 .option-card {
