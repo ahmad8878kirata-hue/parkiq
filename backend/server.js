@@ -1,6 +1,8 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -13,95 +15,149 @@ app.use(express.json());
 let parkingCache = { data: null, lastUpdated: null };
 const MOBIDATA_PARK_API = 'https://api.mobidata-bw.de/park-api/api/public/v3/parking-sites';
 const CACHE_DURATION = 5 * 60 * 1000; // 5 Minuten
-
-// Smaller Stuttgart Zentrum bounding box filter
-const STUTTGART_BBOX = { minLat: 48.76, maxLat: 48.79, minLon: 9.16, maxLon: 9.20 };
+const CACHE_FILE = path.join(__dirname, 'parking_cache.json');
 
 function transformSite(site) {
-  const capacity = site.capacity || 0;
-  const lat = parseFloat(site.lat);
-  const lon = parseFloat(site.lon);
-  return {
-    id: site.id,
-    name: site.name,
-    coordinates: [lat, lon],
-    address: site.address || '',
-    totalCapacity: capacity,
-    freeSpaces: capacity,
-    occupancyRate: 0,
-    hasRealtime: !!site.has_realtime_data,
-    amenities: {
-      evCharging: (site.capacity_charging || 0) > 0,
-      maxHeight: site.max_height || null
-    },
-    status: 'available'
-  };
+    const capacity = site.capacity || 0;
+    const lat = parseFloat(site.lat);
+    const lon = parseFloat(site.lon);
+    return {
+        id: site.id,
+        name: site.name,
+        coordinates: [lat, lon],
+        address: site.address || '',
+        totalCapacity: capacity,
+        freeSpaces: capacity,
+        occupancyRate: 0,
+        hasRealtime: !!site.has_realtime_data,
+        hasFee: site.has_fee,
+        feeDescription: site.fee_description || null,
+        description: site.description || null,
+        amenities: {
+            evCharging: (site.capacity_charging || 0) > 0,
+            maxHeight: site.max_height || null
+        },
+        status: 'available'
+    };
 }
 
-const FALLBACK_PARKING = [
-  { id: 1, name: 'Parkhaus Rathausgarage', coordinates: [48.7741, 9.17787], address: 'Nadlerstraße 19, 70173 Stuttgart', totalCapacity: 133, freeSpaces: 133, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: true, maxHeight: 200 }, status: 'available' },
-  { id: 2, name: 'Tiefgarage Gerber Viertel', coordinates: [48.7723, 9.17245], address: 'Sophienstraße 21, 70178 Stuttgart', totalCapacity: 560, freeSpaces: 560, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: true, maxHeight: null }, status: 'available' },
-  { id: 3, name: 'Parkhaus Hauptbahnhof', coordinates: [48.78535, 9.17748], address: 'Jägerstraße 19, 70174 Stuttgart', totalCapacity: 147, freeSpaces: 147, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: false, maxHeight: null }, status: 'available' },
-  { id: 4, name: 'Parkhaus Stadtmitte', coordinates: [48.7783, 9.17591], address: 'Kronprinzstraße 6, 70173 Stuttgart', totalCapacity: 266, freeSpaces: 266, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: true, maxHeight: 200 }, status: 'available' },
-  { id: 5, name: 'Parkhaus Bohnenviertel', coordinates: [48.77464, 9.18314], address: 'Rosenstraße, 70173 Stuttgart', totalCapacity: 331, freeSpaces: 331, occupancyRate: 0, hasRealtime: true, amenities: { evCharging: false, maxHeight: null }, status: 'available' },
-  { id: 6, name: 'Parkhaus Dorotheen-Quartier', coordinates: [48.77526, 9.18166], address: 'Holzstraße 21, 70173 Stuttgart', totalCapacity: 250, freeSpaces: 250, occupancyRate: 0, hasRealtime: true, amenities: { evCharging: true, maxHeight: 200 }, status: 'available' },
-  { id: 7, name: 'Parkhaus Schloßplatz', coordinates: [48.77994, 9.18095], address: 'Stauffenbergstrasse 5-1, 70173 Stuttgart', totalCapacity: 90, freeSpaces: 90, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: false, maxHeight: 210 }, status: 'available' },
-  { id: 8, name: 'Parkhaus Stephangarage', coordinates: [48.78199, 9.17985], address: 'Kronenstraße 7, 70173 Stuttgart', totalCapacity: 265, freeSpaces: 265, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: false, maxHeight: 200 }, status: 'available' },
-  { id: 9, name: 'Parkhaus Börsenplatz', coordinates: [48.7801, 9.17567], address: 'Huberstraße 2, 70173 Stuttgart', totalCapacity: 176, freeSpaces: 176, occupancyRate: 0, hasRealtime: true, amenities: { evCharging: false, maxHeight: 210 }, status: 'available' },
-  { id: 10, name: 'Parkhaus Kriegsberg', coordinates: [48.78448, 9.17651], address: 'Kriegsbergstr. 32, 70174 Stuttgart', totalCapacity: 255, freeSpaces: 255, occupancyRate: 0, hasRealtime: true, amenities: { evCharging: false, maxHeight: 204 }, status: 'available' },
-  { id: 11, name: 'Parkgalerie Kernerplatz', coordinates: [48.78465, 9.18927], address: 'Kernerplatz 9+10, 70182 Stuttgart', totalCapacity: 141, freeSpaces: 141, occupancyRate: 0, hasRealtime: false, amenities: { evCharging: false, maxHeight: 200 }, status: 'available' },
-  { id: 12, name: 'Parkhaus Königbau Passagen', coordinates: [48.77972, 9.17811], address: 'Bolzstraße 5, 70173 Stuttgart', totalCapacity: 412, freeSpaces: 412, occupancyRate: 0, hasRealtime: true, amenities: { evCharging: true, maxHeight: 200 }, status: 'available' },
-];
-parkingCache.data = FALLBACK_PARKING;
-parkingCache.lastUpdated = Date.now();
+function loadDiskCache() {
+    try {
+        if (fs.existsSync(CACHE_FILE)) {
+            const raw = fs.readFileSync(CACHE_FILE, 'utf-8');
+            const parsed = JSON.parse(raw);
+            if (parsed.data && Array.isArray(parsed.data) && parsed.data.length > 0) {
+                parkingCache.data = parsed.data;
+                parkingCache.lastUpdated = parsed.lastUpdated || Date.now();
+                console.log(`Loaded ${parsed.data.length} parking sites from disk cache`);
+                return true;
+            }
+        }
+    } catch (err) {
+        console.error('Failed to load disk cache:', err.message);
+    }
+    return false;
+}
+
+function saveDiskCache() {
+    try {
+        const payload = { data: parkingCache.data, lastUpdated: parkingCache.lastUpdated };
+        fs.writeFileSync(CACHE_FILE, JSON.stringify(payload), 'utf-8');
+    } catch (err) {
+        console.error('Failed to save disk cache:', err.message);
+    }
+}
+
+// Try to load cache from disk on startup, then attempt a background refresh
+loadDiskCache();
+if (!parkingCache.data) {
+    parkingCache.data = [];
+    parkingCache.lastUpdated = Date.now();
+}
+// Attempt initial API fetch in background so cache is warm for first visitor
+setTimeout(() => fetchAndCacheParking().catch(() => {}), 1000);
+
+const STUTTGART_CENTER = { lat: 48.7758, lon: 9.1829 };
+const RADIUS_METERS = 5000;
+const PAGINATION_LIMIT = 100;
 
 async function fetchAndCacheParking() {
-  try {
-    const response = await axios.get(MOBIDATA_PARK_API, {
-      headers: { 'Accept': 'application/json' },
-      timeout: 3000
-    });
-    const items = response.data?.items || [];
-    const processed = items
-      .filter(s => s.purpose === 'CAR')
-      .map(transformSite)
-      .filter(s => 
-        s.coordinates[0] >= STUTTGART_BBOX.minLat && 
-        s.coordinates[0] <= STUTTGART_BBOX.maxLat && 
-        s.coordinates[1] >= STUTTGART_BBOX.minLon && 
-        s.coordinates[1] <= STUTTGART_BBOX.maxLon
-      );
-    if (processed.length > 0) {
-      parkingCache.data = processed;
-      parkingCache.lastUpdated = Date.now();
+    const allSites = [];
+    let start = 0;
+    let hasMore = true;
+
+    try {
+        while (hasMore) {
+            const url = `${MOBIDATA_PARK_API}?lat=${STUTTGART_CENTER.lat}&lon=${STUTTGART_CENTER.lon}&radius=${RADIUS_METERS}&limit=${PAGINATION_LIMIT}&start=${start}`;
+            const response = await axios.get(url, {
+                headers: { 'Accept': 'application/json' },
+                timeout: 15000
+            });
+            const items = response.data?.items || [];
+            if (items.length === 0) break;
+
+            const filtered = items
+                .filter(s => s.purpose === 'CAR')
+                .map(transformSite);
+
+            allSites.push(...filtered);
+
+            if (items.length < PAGINATION_LIMIT) {
+                hasMore = false;
+            } else {
+                start = response.data.next_id || start + PAGINATION_LIMIT;
+            }
+        }
+
+        if (allSites.length > 0) {
+            parkingCache.data = allSites;
+            parkingCache.lastUpdated = Date.now();
+            saveDiskCache();
+            console.log(`Fetched ${allSites.length} parking sites from API`);
+        }
+        return parkingCache.data;
+    } catch (err) {
+        console.error('MobiData BW API Error:', err.message);
+        return parkingCache.data || [];
     }
-    return parkingCache.data;
-  } catch (err) {
-    console.error('MobiData BW API Error:', err.message);
-    return parkingCache.data || FALLBACK_PARKING;
-  }
 }
 
 app.get('/api/parking/stuttgart', async (req, res) => {
-  const now = Date.now();
-  if (parkingCache.data && (now - parkingCache.lastUpdated < CACHE_DURATION)) {
-    return res.json({ source: 'cache', sites: parkingCache.data });
-  }
-  try {
-    const sites = await fetchAndCacheParking();
-    res.json({ source: 'live', sites });
-  } catch (error) {
-    console.error('MobiData BW API Error:', error.message);
-    if (parkingCache.data) {
-      return res.json({ source: 'fallback_cache', sites: parkingCache.data, error: 'Live data unavailable' });
+    const now = Date.now();
+    if (parkingCache.data && parkingCache.data.length > 0 && (now - parkingCache.lastUpdated < CACHE_DURATION)) {
+        return res.json({ source: 'cache', sites: parkingCache.data });
     }
-    res.status(500).json({ error: 'Fehler beim Abruf der MobiData BW Schnittstelle.' });
-  }
+    try {
+        const sites = await fetchAndCacheParking();
+        if (sites && sites.length > 0) {
+            res.json({ source: 'live', sites });
+        } else {
+            // API returned empty — try disk cache
+            const loaded = loadDiskCache();
+            if (loaded && parkingCache.data.length > 0) {
+                res.json({ source: 'disk_cache', sites: parkingCache.data, error: 'Live data unavailable' });
+            } else {
+                res.json({ source: 'empty', sites: [] });
+            }
+        }
+    } catch (error) {
+        console.error('MobiData BW API Error:', error.message);
+        if (parkingCache.data && parkingCache.data.length > 0) {
+            return res.json({ source: 'fallback_cache', sites: parkingCache.data, error: 'Live data unavailable' });
+        }
+        // Last resort — try disk cache
+        const loaded = loadDiskCache();
+        if (loaded) {
+            return res.json({ source: 'disk_cache', sites: parkingCache.data, error: 'Live data unavailable' });
+        }
+        res.json({ source: 'empty', sites: [] });
+    }
 });
 // ====== End MobiData BW ======
 
 const DIRECT_CITY_PARKING_COST = 18.00;
 const DEFAULT_PARKING_PRICE = 4.00;
+const DEFAULT_HOURLY_RATE = '2 EUR/hr';
 const MAX_WALK_PER_SEGMENT = 1000; // meters – max reasonable walk to/from a transit stop
 const MAX_WALK_TOTAL = 1500; // meters – max total walking for park→stop + stop→dest
 
@@ -116,7 +172,7 @@ async function getClient() {
 
 async function getParkingSites() {
     const now = Date.now();
-    if (parkingCache.data && (now - parkingCache.lastUpdated < CACHE_DURATION)) {
+    if (parkingCache.data && parkingCache.data.length > 0 && (now - parkingCache.lastUpdated < CACHE_DURATION)) {
         return parkingCache.data;
     }
     try {
@@ -139,17 +195,44 @@ function distanceMeters([lat1, lon1], [lat2, lon2]) {
     const R = 6371000;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function pathLengthMeters(path) {
-  let total = 0;
-  for (let i = 1; i < path.length; i++) total += distanceMeters(path[i - 1], path[i]);
-  return total;
+    let total = 0;
+    for (let i = 1; i < path.length; i++) total += distanceMeters(path[i - 1], path[i]);
+    return total;
 }
 
-// Estimate parking price based on type hints in the name
+function extractPriceText(site) {
+    if (!site) return null;
+    const desc = site.feeDescription || site.description || '';
+    if (!desc) return null;
+    const euroMatch = desc.match(/\d+[.,]\d{2}\s*€/);
+    if (euroMatch) return euroMatch[0].trim();
+    const ctMatch = desc.match(/\d+\s*ct\/\w+/i);
+    if (ctMatch) return ctMatch[0].trim();
+    return null;
+}
+
+function getParkingPricing(site) {
+    const isFree = site.hasFee === false;
+    const extractedPrice = extractPriceText(site);
+    const hasPriceData = site.hasFee === true && extractedPrice !== null;
+
+    if (isFree) {
+        return { isFree: true, displayPrice: 'Free', numericPrice: 0 };
+    }
+    if (hasPriceData) {
+        return { isFree: false, displayPrice: extractedPrice, numericPrice: parseFloat(extractedPrice.replace(',', '.').replace(/[^0-9.]/g, '')) || DEFAULT_PARKING_PRICE };
+    }
+    if (site.hasFee === true) {
+        return { isFree: false, displayPrice: DEFAULT_HOURLY_RATE, numericPrice: DEFAULT_PARKING_PRICE };
+    }
+    return { isFree: false, displayPrice: DEFAULT_HOURLY_RATE, numericPrice: DEFAULT_PARKING_PRICE };
+}
+
 function estimateParkingPrice(name) {
     const n = name.toLowerCase();
     if (n.includes('parkhaus') || n.includes('garage') || n.includes('tiefgarage')) return 4.50;
@@ -162,7 +245,7 @@ function estimateStationCoords(parkCoords, walkDistance) {
     const center = [48.7758, 9.1829];
     const dx = center[0] - parkCoords[0];
     const dy = center[1] - parkCoords[1];
-    const dist = Math.sqrt(dx*dx + dy*dy) || 0.001;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
     const offsetDeg = Math.min(walkDistance / 111000, dist * 0.5);
     return [
         +(parkCoords[0] + (dx / dist) * offsetDeg).toFixed(6),
@@ -235,7 +318,7 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
     const url = `https://router.project-osrm.org/route/v1/${profileMap[profile] || 'driving'}/${from[1]},${from[0]};${to[1]},${to[0]}?geometries=geojson&overview=full&steps=false&alternatives=true`;
 
     try {
-        const res = await axios.get(url, { timeout: 1500 });
+        const res = await axios.get(url, { timeout: 5000 });
         if (res.data?.code === 'Ok' && res.data?.routes?.length > 0) {
             let bestRoute = res.data.routes[0];
             let bestPathLength = Infinity;
@@ -261,7 +344,7 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
             setOsrmCache(key, result);
             return result;
         }
-    } catch {}
+    } catch { }
     return null;
 }
 
@@ -513,7 +596,7 @@ app.post('/api/routes', async (req, res) => {
                 try {
                     const destLocs = await withTimeout(client.locations(destName, { results: 1 }), 2000);
                     if (destLocs && destLocs.length > 0) destStation = destLocs[0];
-                } catch {}
+                } catch { }
             }
             destName = destStation?.name || destName;
             destCoords = destStation?.location?.latitude
@@ -567,6 +650,8 @@ app.post('/api/routes', async (req, res) => {
                 { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, details: 'Arrive at destination', durationMin: 0 },
             ];
 
+            const pricing = getParkingPricing(park);
+
             clearRouteTimer(); return res.json({
                 success: true,
                 data: [{
@@ -586,7 +671,12 @@ app.post('/api/routes', async (req, res) => {
                     lat: park.coordinates[0],
                     lng: park.coordinates[1],
                     totalCapacity: park.totalCapacity,
-                    amenities: park.amenities
+                    amenities: park.amenities,
+                    hasFee: park.hasFee,
+                    feeDescription: park.feeDescription,
+                    description: park.description,
+                    isFree: pricing.isFree,
+                    displayPrice: pricing.displayPrice
                 }]
             });
         }
@@ -617,6 +707,7 @@ app.post('/api/routes', async (req, res) => {
             const parkingPrice = estimateParkingPrice(park.name);
             const totalCost = parseFloat(parkingPrice.toFixed(2));
             const savings = Math.max(0, DIRECT_CITY_PARKING_COST - totalCost);
+            const pricing = getParkingPricing(park);
             const driveMinutes = Math.max(1, Math.round(distanceMeters(startCoords || [48.7758, 9.1829], park.coordinates) / 200));
 
             // Find top N stops of each type near the parking
@@ -669,7 +760,12 @@ app.post('/api/routes', async (req, res) => {
                 nearTrain: nearTrain.length > 0 ? nearTrain[0] : null,
                 nearBus: nearBus.length > 0 ? nearBus[0] : null,
                 nearBike: nearBike.length > 0 ? nearBike[0] : null,
-                destStop: destTopTrain.length > 0 ? destTopTrain[0] : null
+                destStop: destTopTrain.length > 0 ? destTopTrain[0] : null,
+                hasFee: park.hasFee,
+                feeDescription: park.feeDescription,
+                description: park.description,
+                isFree: pricing.isFree,
+                displayPrice: pricing.displayPrice
             });
         }
 
@@ -720,7 +816,7 @@ app.get('/api/parkbauten', async (req, res) => {
 app.get('/api/transit-stops', async (req, res) => {
     try {
         // Try to fetch fresh data in the background
-        fetchAndCacheTransitStops().catch(() => {});
+        fetchAndCacheTransitStops().catch(() => { });
         const stops = transitStopsCache.data || FALLBACK_STOPS;
         const features = stops.map(s => ({
             type: 'Feature',

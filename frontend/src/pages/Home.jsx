@@ -19,6 +19,7 @@ const Home = () => {
     const [selectedParking, setSelectedParking] = useState(null);
     const [mapReady, setMapReady] = useState(false);
     const parkbautenLayerRef = useRef(null);
+    const parkingMarkersLayerRef = useRef(null);
     const [sheetExpanded, setSheetExpanded] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [darkMode, setDarkMode] = useState(false);
@@ -238,18 +239,46 @@ const Home = () => {
         };
     }, []);
 
-    // Fetch additional map layers (CKAN data)
+    // Fetch parking sites and additional map layers
     useEffect(() => {
         if (!mapReady || !mapInstance.current) return;
 
+        const map = mapInstance.current;
+
+        // Fetch parking site markers from the live API
+        fetch(`${API_BASE}/api/parking/stuttgart`)
+            .then(res => res.json())
+            .then(json => {
+                if (!mapInstance.current || mapInstance.current !== map) return;
+                const sites = json.sites || [];
+                if (parkingMarkersLayerRef.current) parkingMarkersLayerRef.current.clearLayers();
+                else parkingMarkersLayerRef.current = L.layerGroup().addTo(map);
+
+                sites.forEach(site => {
+                    const marker = L.circleMarker(site.coordinates, {
+                        radius: 8,
+                        color: '#f43f5e',
+                        fillColor: '#f43f5e',
+                        fillOpacity: 0.7,
+                        weight: 2,
+                        opacity: 1
+                    });
+                    marker.bindPopup(`<b>${site.name}</b><br/>${site.address || ''}<br/>Capacity: ${site.totalCapacity}`);
+                    parkingMarkersLayerRef.current.addLayer(marker);
+                });
+            })
+            .catch(err => console.error("Error loading parking sites:", err));
+
+        // Fetch CKAN parkbauten building outlines
         fetch(`${API_BASE}/api/parkbauten`)
             .then(res => res.json())
             .then(data => {
+                if (!mapInstance.current || mapInstance.current !== map) return;
                 if (parkbautenLayerRef.current) parkbautenLayerRef.current.remove();
                 parkbautenLayerRef.current = L.geoJSON(data, {
                     style: { color: '#1d4ed8', weight: 2 },
                     pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 5, color: '#1d4ed8', fillColor: '#1d4ed8', fillOpacity: 0.8 })
-                }).addTo(mapInstance.current);
+                }).addTo(map);
             })
             .catch(err => console.error("Error loading parking layer:", err));
 

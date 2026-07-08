@@ -9,6 +9,25 @@ import './Results.css';
 
 const API_BASE = 'http://localhost:5000';
 
+const DEFAULT_HOURLY_RATE = '2 EUR/hr';
+
+function getParkingDisplayPricing(opt) {
+  const isFree = opt.isFree === true || opt.hasFee === false;
+  if (isFree) {
+    return { label: 'Free Parking', className: 'badge-free', isFree: true };
+  }
+
+  if (opt.displayPrice) {
+    return { label: opt.displayPrice, className: 'badge-paid', isFree: false };
+  }
+
+  if (opt.hasFee === true) {
+    return { label: DEFAULT_HOURLY_RATE, className: 'badge-paid', isFree: false };
+  }
+
+  return { label: `€ ${opt.totalCost}`, className: 'badge-default', isFree: false };
+}
+
 const MODE_META = {
     train: { icon: '🚆', label: 'Train', color: '#f43f5e' },
     bus: { icon: '🚌', label: 'Bus', color: '#3b82f6' },
@@ -389,25 +408,28 @@ const Results = () => {
                                     {sortedOptions.length === 0 && routeOptions.length > 0 && (
                                         <p className="text-muted text-sm text-center">No matching options</p>
                                     )}
-                                    {sortedOptions.map((opt, idx) => (
+                                    {sortedOptions.map((opt, idx) => {
+                                        const displayPrice = getParkingDisplayPricing(opt);
+                                        return (
                                         <div key={idx} className={`option-card ${opt.hasSpecialRate ? 'special-card' : ''}`} onClick={() => handleSelectParking(opt)}>
                                             <div className="flex-between mb-2">
                                                 <div className="font-bold">{opt.parkingName}<span className={`category-tag ${opt.category?.toLowerCase() || 'public'}`}>{opt.category || 'Public'}</span></div>
                                                 <div className="price-container">
                                                     {opt.hasSpecialRate && <span className="old-price">€ {opt.totalCost}</span>}
-                                                    <div className="font-bold text-primary">
-                                                        € {opt.hasSpecialRate ? (parseFloat(opt.totalCost) * 0.8).toFixed(2) : opt.totalCost}
+                                                    <div className={`font-bold text-primary ${displayPrice.className}`}>
+                                                        {displayPrice.isFree ? displayPrice.label : (opt.hasSpecialRate ? `€ ${(parseFloat(opt.totalCost) * 0.8).toFixed(2)}` : displayPrice.label)}
                                                     </div>
                                                 </div>
                                             </div>
                                             <div className="option-details">
                                                 <div className="flex-between text-sm text-muted">
                                                     <div>{opt.totalTime}</div>
-                                                    <div>Save €{opt.savings}</div>
+                                                    {!displayPrice.isFree && <div>Save €{opt.savings}</div>}
                                                 </div>
                                             </div>
                                         </div>
-                                    ))}
+                                        );
+                                    })}
                                     {routeOptions.length > 10 && (
                                         <p className="text-muted text-xs text-center mt-2">Showing top 10 of {routeOptions.length} options</p>
                                     )}
@@ -429,6 +451,14 @@ const Results = () => {
                                         <button className="icon-btn mb-2" onClick={() => { setRouteData(null); setSelectedParking(null); }}><CaretLeft weight="bold" /></button>
                                         <h3 className="text-center font-bold text-xl">{routeData.totalTime} total trip</h3>
                                         <p className="text-center text-muted text-sm mb-4">{selectedParking?.parkingName} — {selectedMode.charAt(0).toUpperCase() + selectedMode.slice(1)}</p>
+                                        {selectedParking && (() => {
+                                            const pd = getParkingDisplayPricing(selectedParking);
+                                            return pd.isFree ? (
+                                                <div className="text-center mb-4"><span className="badge-free-badge">{pd.label}</span></div>
+                                            ) : (
+                                                <div className="text-center text-sm mb-4 font-bold">{pd.label}</div>
+                                            );
+                                        })()}
                                     </div>
                                     <div className="route-timeline">
                                         {routeData.timeline && routeData.timeline.map((leg, i) => (
