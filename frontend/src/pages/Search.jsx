@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { X, CaretLeft, CaretRight, Minus, Plus, MapPin, CalendarBlank } from '@phosphor-icons/react';
+import { X, CaretLeft, CaretRight, MapPin, CalendarBlank } from '@phosphor-icons/react';
 import './Search.css';
 
 const Search = () => {
@@ -14,8 +14,11 @@ const Search = () => {
     const [destination, setDestination] = useState(initialDest || '');
     const [startLocation, setStartLocation] = useState(initialLocation);
     const [startCoords, setStartCoords] = useState(initialCoords);
-    const [activeDay, setActiveDay] = useState(28);
-    const [time, setTime] = useState('08:30');
+    const today = new Date();
+    const [activeDay, setActiveDay] = useState(today.getDate());
+    const [month, setMonth] = useState(today.getMonth());
+    const [year, setYear] = useState(today.getFullYear());
+    const [time, setTime] = useState(`${today.getHours().toString().padStart(2, '0')}:${today.getMinutes().toString().padStart(2, '0')}`);
     const [showDate, setShowDate] = useState(false);
     const [isDeparture, setIsDeparture] = useState(true);
 
@@ -50,7 +53,7 @@ const Search = () => {
             console.error("Geocoding failed:", e);
         }
 
-        const dateStr = `2026-04-${activeDay.toString().padStart(2, '0')}T${time}:00`;
+        const dateStr = `${year}-${(month + 1).toString().padStart(2, '0')}-${activeDay.toString().padStart(2, '0')}T${time}:00`;
         const arrivalTime = new Date(dateStr).toISOString();
         navigate('/results', {
             state: {
@@ -64,29 +67,49 @@ const Search = () => {
         });
     };
 
-    const adjustTime = (minutes) => {
-        let [h, m] = time.split(':').map(Number);
-        m += minutes;
-        if (m >= 60) { h = (h + 1) % 24; m -= 60; }
-        if (m < 0) { h = (h - 1 + 24) % 24; m += 60; }
-        setTime(`${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`);
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const fullMonthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+    const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
+    const firstDayOfMonth = (y, m) => new Date(y, m, 1).getDay();
+
+    const prevMonth = () => {
+        if (month === 0) { setMonth(11); setYear(y => y - 1); }
+        else setMonth(m => m - 1);
+    };
+    const nextMonth = () => {
+        if (month === 11) { setMonth(0); setYear(y => y + 1); }
+        else setMonth(m => m + 1);
+    };
+
+    const isPastDay = (day) => {
+        const d = new Date(year, month, day);
+        const now = new Date();
+        now.setHours(0, 0, 0, 0);
+        return d < now;
     };
 
     const renderDays = () => {
         const days = [];
-        for (let i = 30; i <= 31; i++) days.push(<div key={`prev-${i}`} className="day disabled">{i}</div>);
-        for (let i = 1; i <= 30; i++) {
+        const dim = daysInMonth(year, month);
+        const fdow = firstDayOfMonth(year, month);
+        const prevDim = daysInMonth(year, month - 1 < 0 ? 11 : month - 1);
+
+        for (let i = fdow === 0 ? 6 : fdow - 1; i > 0; i--) {
+            days.push(<div key={`prev-${i}`} className="day disabled">{prevDim - i + 1}</div>);
+        }
+        for (let i = 1; i <= dim; i++) {
+            const past = isPastDay(i);
             days.push(
                 <div 
                     key={`curr-${i}`} 
-                    className={`day ${activeDay === i ? 'active' : ''}`}
-                    onClick={() => setActiveDay(i)}
+                    className={`day ${past ? 'disabled' : ''} ${activeDay === i ? 'active' : ''}`}
+                    onClick={() => { if (!past) setActiveDay(i); }}
                 >
                     {i.toString().padStart(2, '0')}
                 </div>
             );
         }
-        for (let i = 1; i <= 3; i++) days.push(<div key={`next-${i}`} className="day disabled">{i.toString().padStart(2, '0')}</div>);
         return days;
     };
 
@@ -94,6 +117,8 @@ const Search = () => {
         <div className="view">
             <div className="sheet-backdrop" onClick={() => navigate('/home')} />
             <div className="sheet-content">
+                {!showDate && (
+                <>
                 <div className="sheet-header">
                     <h3>Outbound journey</h3>
                     <button className="icon-btn close-btn" onClick={() => navigate('/home')}>
@@ -118,6 +143,8 @@ const Search = () => {
                         className="search-input search-input-dest"
                     />
                 </div>
+                </>
+                )}
                 
                 {!showDate ? (
                     <button 
@@ -126,46 +153,50 @@ const Search = () => {
                     >
                         <CalendarBlank weight="bold" size={18} />
                         <span>Set Date & Time</span>
+                        <span className="date-btn-value">{fullMonthNames[month].slice(0, 3)} {activeDay}, {time}</span>
                     </button>
-                ) : (
-                    <div className="toggle-group mb-4">
-                        <button className={`toggle-btn ${isDeparture ? 'active' : ''}`} onClick={() => setIsDeparture(true)}>Departure</button>
-                        <button className={`toggle-btn ${!isDeparture ? 'active' : ''}`} onClick={() => setIsDeparture(false)}>Arrival</button>
-                    </div>
-                )}
+                ) : null}
                 
                 {showDate && (
-                    <div className="datetime-content">
-                        <div className="calendar-header">
-                            <button className="icon-btn text-muted">
-                                <CaretLeft weight="bold" /> Mar
-                            </button>
-                            <span className="current-month">April 2026</span>
-                            <button className="icon-btn text-muted">
-                                May <CaretRight weight="bold" />
+                    <>
+                        <div className="dt-close-row">
+                            <button className="icon-btn close-btn" onClick={() => setShowDate(false)}>
+                                <X weight="bold" />
                             </button>
                         </div>
-                        
-                        <div className="calendar-grid">
-                            <div className="day-name">Mo</div><div className="day-name">Tu</div><div className="day-name">We</div><div className="day-name">Th</div><div className="day-name">Fr</div><div className="day-name">Sa</div><div className="day-name">Su</div>
-                            {renderDays()}
+                        <div className="datetime-content">
+                            <div className="calendar-header">
+                                <button className="icon-btn text-muted" onClick={prevMonth}>
+                                    <CaretLeft weight="bold" /> {month === 0 ? monthNames[11] : monthNames[month - 1]}
+                                </button>
+                                <span className="current-month">{fullMonthNames[month]} {year}</span>
+                                <button className="icon-btn text-muted" onClick={nextMonth}>
+                                    {month === 11 ? monthNames[0] : monthNames[month + 1]} <CaretRight weight="bold" />
+                                </button>
+                            </div>
+                            
+                            <div className="calendar-grid">
+                                <div className="day-name">Mo</div><div className="day-name">Tu</div><div className="day-name">We</div><div className="day-name">Th</div><div className="day-name">Fr</div><div className="day-name">Sa</div><div className="day-name">Su</div>
+                                {renderDays()}
+                            </div>
+                            
+                            <div className="time-picker mb-4">
+                                <input
+                                    type="time"
+                                    value={time}
+                                    onChange={(e) => setTime(e.target.value)}
+                                    className="time-input"
+                                />
+                                <span className="time-display">{time}</span>
+                                <button className="btn btn-outline ml-auto now-btn" onClick={() => {
+                                    const now = new Date();
+                                    setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
+                                    setActiveDay(now.getDate());
+                                }}>Now</button>
+                            </div>
+                            <button className="btn btn-primary w-100 set-date-btn" onClick={() => setShowDate(false)}>Set</button>
                         </div>
-                        
-                        <div className="time-picker mb-4">
-                            <button className="icon-btn text-primary" onClick={() => adjustTime(-15)}>
-                                <Minus weight="bold" />
-                            </button>
-                            <span className="time-display">{time}</span>
-                            <button className="icon-btn text-primary" onClick={() => adjustTime(15)}>
-                                <Plus weight="bold" />
-                            </button>
-                            <button className="btn btn-outline ml-auto now-btn" onClick={() => {
-                                const now = new Date();
-                                setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
-                                setActiveDay(now.getDate());
-                            }}>Now</button>
-                        </div>
-                    </div>
+                    </>
                 )}
                 
                 {selectedParking && (
@@ -175,6 +206,7 @@ const Search = () => {
                         <button className="chip-remove" onClick={() => navigate('/search', { state: {}, replace: true })}><X weight="bold" /></button>
                     </div>
                 )}
+                {!showDate && (
                 <button 
                     className="btn btn-primary btn-large w-100" 
                     onClick={handleAccept}
@@ -182,6 +214,7 @@ const Search = () => {
                 >
                     {loadingLocation ? 'Finding Best Match...' : 'Find Best PBW Route'}
                 </button>
+                )}
             </div>
         </div>
     );

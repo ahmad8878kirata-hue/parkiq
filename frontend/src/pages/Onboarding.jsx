@@ -196,12 +196,6 @@ const Onboarding = () => {
                             <button className="btn w-100" style={{background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', justifyContent: 'flex-start', padding: '1rem'}} onClick={() => handlePermissionChoice('all_time')}>
                                 Allow all the time
                             </button>
-                            <button className="btn w-100" style={{background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', justifyContent: 'flex-start', padding: '1rem'}} onClick={() => handlePermissionChoice('while_using')}>
-                                Allow while using the app
-                            </button>
-                            <button className="btn w-100" style={{background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', justifyContent: 'flex-start', padding: '1rem'}} onClick={() => handlePermissionChoice('this_time')}>
-                                Allow this time
-                            </button>
                             <button className="btn w-100" style={{background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', justifyContent: 'flex-start', padding: '1rem'}} onClick={() => handlePermissionChoice('dont_allow')}>
                                 Don't allow
                             </button>

@@ -46,7 +46,16 @@
   padding: 0.5rem 1.2rem; font-size: 0.875rem;
   margin-bottom: 1rem; width: auto; margin-left: 0;
 }
+.date-btn-value {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--primary);
+  font-size: 0.8rem;
+}
 
+.dt-close-row {
+  display: flex; justify-content: flex-end; margin-bottom: 0.5rem;
+}
 .datetime-content {
   padding-left: 0.75rem;
 }
@@ -87,6 +96,14 @@
   display: flex; align-items: center; gap: 1rem;
   background: var(--bg-color); padding: 0.5rem 1rem; border-radius: var(--radius-md);
 }
+.time-input {
+  width: 140px; padding: 0.5rem 0.75rem; border-radius: var(--radius-md);
+  border: 1.5px solid var(--border-color); outline: none;
+  font-family: var(--font-body); font-size: 1.1rem;
+  background: var(--surface); color: var(--text-main);
+}
+.time-input:focus { border-color: var(--primary); }
+.set-date-btn { margin-top: 0.75rem; }
 .time-display { font-size: 1.5rem; font-weight: 700; font-family: var(--font-heading); }
 
 .now-btn {
