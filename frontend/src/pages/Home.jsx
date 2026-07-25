@@ -40,6 +40,7 @@ const Home = () => {
     const [searchMonth, setSearchMonth] = useState(today.getMonth());
     const [searchYear, setSearchYear] = useState(today.getFullYear());
     const [searchTime, setSearchTime] = useState(`${today.getHours().toString().padStart(2, '0')}:${today.getMinutes().toString().padStart(2, '0')}`);
+    const [searchTimeConfirmed, setSearchTimeConfirmed] = useState(false);
     const [searchShowDate, setSearchShowDate] = useState(false);
     const [isDeparture, setIsDeparture] = useState(true);
     const [loadingLocation, setLoadingLocation] = useState(false);
@@ -110,7 +111,7 @@ const Home = () => {
                 <div 
                     key={`curr-${i}`} 
                     className={`day ${past ? 'disabled' : ''} ${searchActiveDay === i ? 'active' : ''}`}
-                    onClick={() => { if (!past) setSearchActiveDay(i); }}
+                    onClick={() => { if (!past) { setSearchActiveDay(i); setSearchTimeConfirmed(false); } }}
                 >
                     {i.toString().padStart(2, '0')}
                 </div>
@@ -301,13 +302,39 @@ const Home = () => {
                 if (!mapInstance.current || mapInstance.current !== map) return;
                 if (parkbautenLayerRef.current) parkbautenLayerRef.current.remove();
                 parkbautenLayerRef.current = L.geoJSON(data, {
-                    style: { color: '#1d4ed8', weight: 2 },
-                    pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 5, color: '#1d4ed8', fillColor: '#1d4ed8', fillOpacity: 0.8 })
+                    style: { color: '#f43f5e', weight: 2 },
+                    pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 5, color: '#f43f5e', fillColor: '#f43f5e', fillOpacity: 0.8 })
                 }).addTo(map);
             })
             .catch(err => console.error("Error loading parking layer:", err));
 
     }, [mapReady]);
+
+    // When location is enabled after mount, update the marker and map center
+    useEffect(() => {
+        if (!locationEnabled || !mapInstance.current || !markerInstance.current) return;
+        if (!("geolocation" in navigator)) return;
+        navigator.geolocation.getCurrentPosition(
+            async (pos) => {
+                const ll = [pos.coords.latitude, pos.coords.longitude];
+                markerInstance.current?.setLatLng(ll);
+                mapInstance.current?.flyTo(ll, 14, { animate: true });
+                setStartCoords(ll);
+                try {
+                    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${ll[0]}&lon=${ll[1]}`);
+                    const data = await res.json();
+                    if (data && data.display_name) {
+                        const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];
+                        setLocationStatus(name);
+                    } else {
+                        setLocationStatus('My Location');
+                    }
+                } catch { setLocationStatus('My Location'); }
+            },
+            () => {},
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+    }, [locationEnabled]);
 
 // Update map tiles when dark mode changes
 useEffect(() => {
@@ -355,7 +382,7 @@ return (
                             🔒 Privacy Settings
                         </div>
                         <div className="dropdown-item" onClick={() => { setProfileModalOpen(true); setSettingsOpen(false); }}>
-                            👤 User Profile Options
+                            ℹ️ Info &amp; Hilfe
                         </div>
 
                     </div>
@@ -373,7 +400,7 @@ return (
                 ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
                         <div style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '0.9rem' }}>
-                            {locationStatus || 'Stuttgart'}
+                            {locationStatus || 'Set your departure point'}
                         </div>
                         <button
                             onClick={() => { setEditingLocation(true); isPickingLocationRef.current = true; }}
@@ -388,7 +415,7 @@ return (
         </div>
 
         <div className="top-park-btn-container" style={{ position: 'absolute', top: '5rem', right: '1rem', zIndex: 20 }}>
-            <button className="btn btn-primary shadow-glow" onClick={() => { setSearchStartLocation(locationStatus || 'Stuttgart'); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }} style={{ padding: '0.6rem 1.2rem', borderRadius: '1.5rem 1.5rem 1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.875rem', fontWeight: '600' }}>
+            <button className="btn btn-primary shadow-glow" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }} style={{ padding: '0.6rem 1.2rem', borderRadius: '1.5rem 1.5rem 1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.875rem', fontWeight: '600' }}>
                 <span>Park & Ride</span>
                 <CaretRight weight="bold" />
             </button>
@@ -439,7 +466,7 @@ return (
                                 </div>
                             )}
                         </div>
-<button className="btn btn-primary w-100 mt-2" onClick={() => { setSearchStartLocation(locationStatus || 'Stuttgart'); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
+<button className="btn btn-primary w-100 mt-2" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
     <NavigationArrow weight="bold" className="mr-2" /> Route from here
 </button>
                     </div>
@@ -448,7 +475,7 @@ return (
         )}
 
         <div className="bottom-controls">
-            <div className="search-container" onClick={() => { setSearchStartLocation(locationStatus || 'Stuttgart'); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
+            <div className="search-container" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
                 <MagnifyingGlass weight="bold" className="search-icon" />
                 <div className="search-text">{destStatus ? destStatus : 'Click map to set destination'}</div>
                 <button className="mic-btn" onClick={(e) => {
@@ -465,8 +492,6 @@ return (
         {showSearchSheet && (
             <div className="search-sheet-overlay visible" onClick={() => setShowSearchSheet(false)}>
                 <div className="search-sheet" onClick={e => e.stopPropagation()}>
-                    {!searchShowDate && (
-                    <>
                     <div className="sheet-header">
                         <h3>Outbound journey</h3>
                         <button className="icon-btn close-btn" onClick={() => setShowSearchSheet(false)}>
@@ -491,21 +516,32 @@ return (
                             className="search-input search-input-dest"
                         />
                     </div>
-                    </> 
-                    )}
 
                     {!searchShowDate ? (
-                        <button 
-                            className="btn btn-outline date-btn" 
-                            onClick={() => setSearchShowDate(true)}
-                        >
-                            <CalendarBlank weight="bold" size={18} />
-                            <span>Set Date & Time</span>
-                            <span className="date-btn-value">{searchFullMonthNames[searchMonth].slice(0, 3)} {searchActiveDay}, {searchTime}</span>
-                        </button>
-                    ) : null}
-
-                    {searchShowDate && (
+                        <>
+                                    {searchTimeConfirmed ? (
+                                <div className="time-confirmed-badge">
+                                    <span className="time-confirmed-label">
+                                        {searchActiveDay === today.getDate() && searchMonth === today.getMonth() && searchYear === today.getFullYear()
+                                            ? `Heute, ${searchTime}`
+                                            : `${searchFullMonthNames[searchMonth].slice(0, 3)} ${searchActiveDay}, ${searchTime}`}
+                                    </span>
+                                    <button className="time-edit-btn" onClick={() => { setSearchTimeConfirmed(false); setSearchShowDate(true); }}>
+                                        <Pencil weight="bold" size={14} />
+                                    </button>
+                                </div>
+                            ) : (
+                                <button 
+                                    className="btn btn-outline date-btn" 
+                                    onClick={() => setSearchShowDate(true)}
+                                >
+                                    <CalendarBlank weight="bold" size={18} />
+                                    <span>Set Date & Time</span>
+                                    <span className="date-btn-value">{searchFullMonthNames[searchMonth].slice(0, 3)} {searchActiveDay}, {searchTime}</span>
+                                </button>
+                            )}
+                        </>
+                    ) : (
                         <>
                             <div className="dt-close-row">
                                 <button className="icon-btn close-btn" onClick={() => setSearchShowDate(false)}>
@@ -532,17 +568,21 @@ return (
                                     <input
                                         type="time"
                                         value={searchTime}
-                                        onChange={(e) => setSearchTime(e.target.value)}
+                                        onChange={(e) => { setSearchTime(e.target.value); setSearchTimeConfirmed(false); }}
                                         className="time-input"
+                                        step="60"
                                     />
                                     <span className="time-display">{searchTime}</span>
                                     <button className="btn btn-outline ml-auto now-btn" onClick={() => {
                                         const now = new Date();
                                         setSearchTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
                                         setSearchActiveDay(now.getDate());
+                                        setSearchTimeConfirmed(false);
                                     }}>Now</button>
                                 </div>
-                                <button className="btn btn-primary w-100 set-date-btn" onClick={() => setSearchShowDate(false)}>Set</button>
+                                <button className="btn btn-primary w-100 set-date-btn" onClick={() => { setSearchShowDate(false); setSearchTimeConfirmed(true); }}>
+                                    <span style={{ marginRight: '0.4rem' }}>✔</span> Save
+                                </button>
                             </div>
                         </>
                     )}
@@ -595,25 +635,32 @@ return (
             </div>
         )}
 
-        {/* Profile Modal */}
+        {/* Info & Hilfe Modal */}
         {profileModalOpen && (
             <div className="parking-sheet-overlay visible" onClick={() => setProfileModalOpen(false)}>
-                <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{ padding: '2rem', height: 'auto', bottom: 0 }}>
-                    <h3 style={{ marginBottom: '0.5rem' }}>User Category</h3>
-                    <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.875rem' }}>Select your profile type to apply relevant discounts and rules.</p>
+                <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{ padding: '2rem', height: 'auto', bottom: 0, maxHeight: '85vh', overflowY: 'auto' }}>
+                    <h3 style={{ marginBottom: '1rem' }}>Info &amp; Hilfe</h3>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                        <button className={`btn ${parkingType === 'kurz' ? 'btn-primary' : 'btn-outline'} w-100`} onClick={() => { setProfileModalOpen(false); navigate('/selection'); }}>
-                            Regular Customer
-                        </button>
-                        <button className={`btn btn-outline w-100`} onClick={() => { setProfileModalOpen(false); navigate('/selection'); }}>
-                            🎓 Student / University (Discounted)
-                        </button>
-                        <button className={`btn ${parkingType === 'dauer' ? 'btn-primary' : 'btn-outline'} w-100`} onClick={() => { setProfileModalOpen(false); navigate('/selection'); }}>
-                            Permanent Parker
-                        </button>
+                    <p style={{ color: 'var(--text-main)', marginBottom: '1.25rem', fontSize: '0.875rem', lineHeight: '1.6' }}>
+                        Diese App unterstützt Sie bei der Planung Ihrer nachhaltigen Mobilität mit Bus, Bahn und Fahrrad.
+                    </p>
+                    <p style={{ color: 'var(--text-main)', marginBottom: '1.25rem', fontSize: '0.875rem', lineHeight: '1.6' }}>
+                        Bei Fragen oder Problemen kontaktieren Sie uns bitte.
+                    </p>
+
+                    <div style={{ background: 'var(--bg-color)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem' }}>
+                        <div style={{ fontSize: '0.875rem', lineHeight: '1.8', color: 'var(--text-main)' }}>
+                            <div><strong>Telefon:</strong> +49 (0)711 89255-0</div>
+                            <div><strong>Telefax:</strong> +49 (0)711 89255-599</div>
+                            <div><strong>E-Mail:</strong> info@pbw</div>
+                        </div>
                     </div>
-                    <button className="btn btn-text w-100" style={{ marginTop: '1rem' }} onClick={() => setProfileModalOpen(false)}>Cancel</button>
+
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: '1.6', marginBottom: '1.5rem' }}>
+                        <strong>Weitere Informationen:</strong> Informationen zu Angeboten für Studierende und Berufstätige finden Sie auf der PBW-Website.
+                    </p>
+
+                    <button className="btn btn-primary w-100" onClick={() => setProfileModalOpen(false)}>Schließen</button>
                 </div>
             </div>
         )}

@@ -43,6 +43,20 @@ body.dark-mode .mode-tabs {
   background: var(--text-main); color: white;
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
+.mode-tab.best-mode {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  border: 1.5px solid #22c55e;
+}
+.mode-tab.best-mode.active {
+  background: #22c55e; color: white;
+  border-color: #22c55e;
+}
+.best-mode-check {
+  display: inline-flex;
+  margin-left: 0.15rem;
+  color: inherit;
+}
 body.dark-mode .mode-tab.active {
   background: var(--primary); color: white;
 }
@@ -478,5 +492,22 @@ body.dark-mode .sort-btn.active {
     color: var(--text-muted);
     text-transform: uppercase;
     margin-top: -0.25rem;
+}
+
+/* Ticket badges */
+.badge-transit-free {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: rgba(59, 130, 246, 0.12);
+    color: var(--secondary);
+    font-weight: 700;
+    font-size: 0.8rem;
+    padding: 0.3rem 0.8rem;
+    border-radius: var(--radius-full, 999px);
+}
+
+.text-success {
+    color: var(--success, #22c55e);
 }
 

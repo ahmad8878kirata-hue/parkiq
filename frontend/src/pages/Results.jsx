@@ -2,8 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 const FETCH_TIMEOUT = 20000; // 20s
 import { useParking } from '../context/ParkingContext';
-import { ArrowLeft, MapPin, Car, PersonSimpleWalk, Train, Bus, Bicycle, CircleNotch, CaretLeft, Envelope, WarningCircle } from '@phosphor-icons/react';
-import SpecialOfferToast from '../components/SpecialOfferToast';
+import { ArrowLeft, MapPin, Car, PersonSimpleWalk, Train, Bus, Bicycle, CircleNotch, CaretLeft, Envelope, WarningCircle, Ticket, Check } from '@phosphor-icons/react';
 import L from 'leaflet';
 import './Results.css';
 
@@ -37,7 +36,7 @@ const MODE_META = {
 const Results = () => {
     const navigate = useNavigate();
     const locationState = useLocation();
-    const { parkingType, isRegistered } = useParking();
+    const { parkingType, hasJobTicket, hasDauerparkticket, dauerparkticketStation, dauerparkticketStationCoords } = useParking();
     const mapRef = useRef(null);
     const mapInstance = useRef(null);
     const parkingMarkersRef = useRef([]);
@@ -53,7 +52,6 @@ const Results = () => {
     };
 
     const [isExpanded, setIsExpanded] = useState(true);
-    const [showToast, setShowToast] = useState(false);
 
     const touchStartY = useRef(0);
     const handleTouchStart = (e) => { touchStartY.current = e.touches ? e.touches[0].clientY : e.clientY; };
@@ -74,6 +72,22 @@ const Results = () => {
             return sortOrder === 'asc' ? aVal - bVal : bVal - aVal;
         })
         .slice(0, 10);
+
+    // Determine best transport mode: which mode has the cheapest option available
+    const bestMode = (() => {
+        const modeKeys = ['train', 'bus', 'bicycle'];
+        const modeHasFlag = { train: 'hasTrainStop', bus: 'hasBusStop', bicycle: 'hasBikeStop' };
+        let best = null;
+        let bestCost = Infinity;
+        for (const mode of modeKeys) {
+            const available = routeOptions.filter(o => o[modeHasFlag[mode]]);
+            if (available.length === 0) continue;
+            const cheapest = Math.min(...available.map(o => parseFloat(o.totalCost) || Infinity));
+            if (cheapest < bestCost) { bestCost = cheapest; best = mode; }
+        }
+        return best;
+    })();
+
     const [selectedParking, setSelectedParking] = useState(null);
     const [routeData, setRouteData] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -87,6 +101,23 @@ const Results = () => {
     const arrivalTime = locationState.state?.arrivalTime;
     const parkingId = locationState.state?.parkingId || null;
     const maxTimeMinutes = locationState.state?.maxTimeMinutes || 120;
+
+    // Check if destination is near the Dauerparkticket station (text match OR geographic proximity)
+    const isNearDauerparkticketStation = hasDauerparkticket && dauerparkticketStation && (
+        destination.toLowerCase().includes(dauerparkticketStation.toLowerCase()) ||
+        dauerparkticketStation.toLowerCase().includes(destination.toLowerCase()) ||
+        (dauerparkticketStationCoords && destCoords && (() => {
+            const R = 6371e3;
+            const toRad = (d) => d * Math.PI / 180;
+            const dLat = toRad(destCoords[0] - dauerparkticketStationCoords[0]);
+            const dLon = toRad(destCoords[1] - dauerparkticketStationCoords[1]);
+            const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(dauerparkticketStationCoords[0])) * Math.cos(toRad(destCoords[0])) * Math.sin(dLon / 2) ** 2;
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) < 500;
+        })())
+    );
+
+    // When destination matches station, the effective starting point is the station itself
+    const effectiveStartLocation = isNearDauerparkticketStation ? dauerparkticketStation : startLocation;
 
     // Fetch parking options list
     useEffect(() => {
@@ -112,12 +143,10 @@ const Results = () => {
                     const enriched = (json.data || []).map((opt, index) => ({
                         ...opt,
                         category: 'Public',
-                        hasSpecialRate: index === 0 && isRegistered
+                        hasTransitDiscount: hasJobTicket,
+                        isDauerparkticketFree: isNearDauerparkticketStation
                     }));
                     setRouteOptions(enriched);
-                    if (isRegistered && enriched.some(o => o.hasSpecialRate)) {
-                        setTimeout(() => setShowToast(true), 1000);
-                    }
                 }
             } catch (err) {
                 if (err.name === 'AbortError') return; // superseded by newer request
@@ -128,7 +157,7 @@ const Results = () => {
         };
         fetchOptions();
         return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
-    }, [destination, startCoords, arrivalTime, parkingId, isRegistered]);
+    }, [destination, startCoords, arrivalTime, parkingId, hasJobTicket]);
 
     // Init map with markers
     useEffect(() => {
@@ -302,7 +331,7 @@ const Results = () => {
 
     const handleEmailReservation = (parkingName) => {
         const subject = `Reservation Request: ${parkingName}`;
-        const body = `Hello Customer Service,\n\nI would like to make a reservation for ${parkingName} as a ${parkingType === 'dauer' ? 'Permanent' : 'Short-term'} parker.\n\nStatus: ${isRegistered ? 'Registered (Sondertarife active)' : 'Guest'}\n\nPlease confirm availability.`;
+        const body = `Hello Customer Service,\n\nI would like to make a reservation for ${parkingName}.\n\n${hasDauerparkticket ? `Dauerparkticket Station: ${dauerparkticketStation}` : 'Guest'}\n\nPlease confirm availability.`;
         window.location.href = `mailto:service@parkiq.example.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     };
 
@@ -334,23 +363,26 @@ const Results = () => {
 
     const renderModeTabs = () => (
         <div className="mode-tabs">
-            {Object.entries(MODE_META).map(([mode, meta]) => (
-                <button
-                    key={mode}
-                    className={`mode-tab ${selectedMode === mode ? 'active' : ''}`}
-                    onClick={() => handleModeChange(mode)}
-                >
-                    <span className="mode-tab-icon">{meta.icon}</span>
-                    <span className="mode-tab-label">{meta.label}</span>
-                </button>
-            ))}
+            {Object.entries(MODE_META).map(([mode, meta]) => {
+                const isBest = mode === bestMode;
+                return (
+                    <button
+                        key={mode}
+                        className={`mode-tab ${selectedMode === mode ? 'active' : ''} ${isBest ? 'best-mode' : ''}`}
+                        onClick={() => handleModeChange(mode)}
+                    >
+                        <span className="mode-tab-icon">{meta.icon}</span>
+                        <span className="mode-tab-label">{meta.label}</span>
+                        {isBest && <span className="best-mode-check"><Check weight="bold" size={12} /></span>}
+                    </button>
+                );
+            })}
         </div>
     );
 
     return (
         <div className="view">
             {hiddenIcons}
-            {showToast && <SpecialOfferToast message="Student/Employee discount applied! -20%" onClose={() => setShowToast(false)} />}
 
             {loading ? (
                 <div style={{display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', background:'var(--surface)'}}>
@@ -410,21 +442,24 @@ const Results = () => {
                                     )}
                                     {sortedOptions.map((opt, idx) => {
                                         const displayPrice = getParkingDisplayPricing(opt);
+                                        const transitFree = opt.hasTransitDiscount;
+                                        const dauerparkFree = opt.isDauerparkticketFree;
                                         return (
-                                        <div key={idx} className={`option-card ${opt.hasSpecialRate ? 'special-card' : ''}`} onClick={() => handleSelectParking(opt)}>
+                                        <div key={idx} className={`option-card ${transitFree || dauerparkFree ? 'special-card' : ''}`} onClick={() => handleSelectParking(opt)}>
                                             <div className="flex-between mb-2">
                                                 <div className="font-bold">{opt.parkingName}<span className={`category-tag ${opt.category?.toLowerCase() || 'public'}`}>{opt.category || 'Public'}</span></div>
                                                 <div className="price-container">
-                                                    {opt.hasSpecialRate && <span className="old-price">€ {opt.totalCost}</span>}
-                                                    <div className={`font-bold text-primary ${displayPrice.className}`}>
-                                                        {displayPrice.isFree ? displayPrice.label : (opt.hasSpecialRate ? `€ ${(parseFloat(opt.totalCost) * 0.8).toFixed(2)}` : displayPrice.label)}
+                                                    <div className={`font-bold text-primary ${dauerparkFree ? 'badge-free' : displayPrice.className}`}>
+                                                        {dauerparkFree ? 'Free Parking' : (transitFree ? 'Free Transit' : displayPrice.label)}
                                                     </div>
                                                 </div>
                                             </div>
                                             <div className="option-details">
                                                 <div className="flex-between text-sm text-muted">
                                                     <div>{opt.totalTime}</div>
-                                                    {!displayPrice.isFree && <div>Save €{opt.savings}</div>}
+                                                    {!displayPrice.isFree && !transitFree && !dauerparkFree && <div>Save €{opt.savings}</div>}
+                                                    {transitFree && <div className="text-success">Job-Ticket active</div>}
+                                                    {dauerparkFree && <div className="text-success">Dauerparkticket: Station</div>}
                                                 </div>
                                             </div>
                                         </div>
@@ -451,10 +486,25 @@ const Results = () => {
                                         <button className="icon-btn mb-2" onClick={() => { setRouteData(null); setSelectedParking(null); }}><CaretLeft weight="bold" /></button>
                                         <h3 className="text-center font-bold text-xl">{routeData.totalTime} total trip</h3>
                                         <p className="text-center text-muted text-sm mb-4">{selectedParking?.parkingName} — {selectedMode.charAt(0).toUpperCase() + selectedMode.slice(1)}</p>
+                                        {hasJobTicket && (
+                                            <div className="text-center mb-2">
+                                                <div className="badge-transit-free"><Ticket weight="fill" /> Job-Ticket: Transit is free</div>
+                                            </div>
+                                        )}
+                                        {isNearDauerparkticketStation && (
+                                            <div className="text-center mb-2">
+                                                <div className="badge-free-badge"><MapPin weight="fill" /> Dauerparkticket: Free at {dauerparkticketStation}</div>
+                                            </div>
+                                        )}
+                                        {hasDauerparkticket && dauerparkticketStation && !isNearDauerparkticketStation && (
+                                            <div className="text-center text-sm mb-2 text-muted">
+                                                <MapPin weight="fill" className="text-primary" /> Dauerparkticket Station: {dauerparkticketStation}
+                                            </div>
+                                        )}
                                         {selectedParking && (() => {
                                             const pd = getParkingDisplayPricing(selectedParking);
-                                            return pd.isFree ? (
-                                                <div className="text-center mb-4"><span className="badge-free-badge">{pd.label}</span></div>
+                                            return (pd.isFree || isNearDauerparkticketStation) ? (
+                                                <div className="text-center mb-4"><span className="badge-free-badge">{isNearDauerparkticketStation ? 'Free - Dauerparkticket' : pd.label}</span></div>
                                             ) : (
                                                 <div className="text-center text-sm mb-4 font-bold">{pd.label}</div>
                                             );
@@ -473,14 +523,14 @@ const Results = () => {
                                                 </div>
                                                 <div className="details">
                                                     <div className="title font-bold">
-                                                        {leg.name === 'Current Location' ? startLocation : leg.name}
+                                                        {leg.name === 'Current Location' ? effectiveStartLocation : leg.name}
                                                     </div>
                                                     <div className="subtitle text-sm text-muted">{leg.details}</div>
                                                 </div>
                                             </div>
                                         ))}
                                     </div>
-                                    {parkingType === 'dauer' && <button className="btn btn-outline w-100 mt-6 mb-2" onClick={() => handleEmailReservation(routeData.parkingName)}>Request Reservation</button>}
+                                    {hasDauerparkticket && <button className="btn btn-outline w-100 mt-6 mb-2" onClick={() => handleEmailReservation(routeData.parkingName)}>Request Reservation</button>}
                                     <button className="btn btn-primary btn-large w-100 mb-4 shadow-glow" onClick={handleStartNavigation}>Start Navigation</button>
                                 </div>
                             )}

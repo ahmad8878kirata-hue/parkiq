@@ -4,11 +4,21 @@ const ParkingContext = createContext();
 
 export const ParkingProvider = ({ children }) => {
     const [parkingType, setParkingType] = useState('kurz');
-    const [isRegistered, setIsRegistered] = useState(false);
-    const [locationEnabled, setLocationEnabled] = useState(null); // null=undecided, true=enabled, false=not now
+    const [hasDauerparkticket, setHasDauerparkticket] = useState(false);
+    const [hasJobTicket, setHasJobTicket] = useState(false);
+    const [dauerparkticketStation, setDauerparkticketStation] = useState('');
+    const [dauerparkticketStationCoords, setDauerparkticketStationCoords] = useState(null);
+    const [locationEnabled, setLocationEnabled] = useState(null);
 
     return (
-        <ParkingContext.Provider value={{ parkingType, setParkingType, isRegistered, setIsRegistered, locationEnabled, setLocationEnabled }}>
+        <ParkingContext.Provider value={{
+            parkingType, setParkingType,
+            hasDauerparkticket, setHasDauerparkticket,
+            hasJobTicket, setHasJobTicket,
+            dauerparkticketStation, setDauerparkticketStation,
+            dauerparkticketStationCoords, setDauerparkticketStationCoords,
+            locationEnabled, setLocationEnabled
+        }}>
             {children}
         </ParkingContext.Provider>
     );
