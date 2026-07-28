@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { X, CaretLeft, CaretRight, MapPin, CalendarBlank } from '@phosphor-icons/react';
 import './Search.css';
+import '../components/AutocompleteInput.css';
+import AutocompleteInput from '../components/AutocompleteInput';
 
 const Search = () => {
     const navigate = useNavigate();
@@ -11,9 +13,12 @@ const Search = () => {
     const initialCoords = locationState.state?.startCoords || [48.7758, 9.1829];
     const initialDest = locationState.state?.destination || '';
     const initialDestCoords = locationState.state?.destCoords || null;
+    const [destCoords, setDestCoords] = useState(initialDestCoords);
     const [destination, setDestination] = useState(initialDest || '');
     const [startLocation, setStartLocation] = useState(initialLocation);
     const [startCoords, setStartCoords] = useState(initialCoords);
+    const startAutocompleteRef = useRef(false);
+    const destAutocompleteRef = useRef(false);
     const today = new Date();
     const [activeDay, setActiveDay] = useState(today.getDate());
     const [month, setMonth] = useState(today.getMonth());
@@ -29,7 +34,17 @@ const Search = () => {
         let finalStartCoords = startCoords;
         let finalDestName = destination;
         let finalStartName = startLocation;
-        let finalDestCoords = initialDestCoords;
+        let finalDestCoords = destCoords;
+
+        // Use autocomplete-selected coordinates if available
+        if (startAutocompleteRef.current) {
+            finalStartCoords = startCoords;
+            finalStartName = startLocation;
+        }
+        if (destAutocompleteRef.current) {
+            finalDestCoords = destCoords;
+            finalDestName = destination;
+        }
 
         try {
             if (!finalDestCoords) {
@@ -41,7 +56,7 @@ const Search = () => {
                 }
             }
 
-            if (startLocation && startLocation !== 'Stuttgart' && startLocation !== 'Your Location') {
+            if (!startAutocompleteRef.current && startLocation && startLocation !== 'Stuttgart' && startLocation !== 'Your Location') {
                 const startRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(startLocation)}&limit=1`);
                 const startData = await startRes.json();
                 if (startData.features && startData.features.length > 0) {
@@ -127,18 +142,26 @@ const Search = () => {
                 </div>
                 
                 <div className="mb-4">
-                    <input 
-                        type="text" 
-                        placeholder="Starting Point"
-                        value={startLocation} 
+                    <AutocompleteInput
+                        placeholder="Starting Point (e.g. Stuttgart Hbf)"
+                        value={startLocation}
                         onChange={(e) => setStartLocation(e.target.value)}
+                        onSelect={(data) => {
+                            setStartCoords(data.coordinates);
+                            setStartLocation(data.name);
+                            startAutocompleteRef.current = true;
+                        }}
                         className="search-input"
                     />
-                    <input 
-                        type="text" 
-                        placeholder="Where are you going?"
-                        value={destination} 
+                    <AutocompleteInput
+                        placeholder="Where are you going? (e.g. Schlossplatz, Stuttgart)"
+                        value={destination}
                         onChange={(e) => setDestination(e.target.value)}
+                        onSelect={(data) => {
+                            setDestCoords(data.coordinates);
+                            setDestination(data.name);
+                            destAutocompleteRef.current = true;
+                        }}
                         autoFocus
                         className="search-input search-input-dest"
                     />

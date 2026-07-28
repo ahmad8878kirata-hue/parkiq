@@ -183,44 +183,52 @@ h1, h2, h3, h4, h5, h6 { font-family: var(--font-heading); }
 
 /* Dark Mode Overrides */
 body.dark-mode {
-    --bg-color: #121212;
-    --surface: #1e1e1e;
-    --text-main: #f8fafc;
-    --text-muted: #94a3b8;
-    --border-color: #333333;
+    --bg-color: #000000;
+    --surface: #0a0a0a;
+    --text-main: #ffffff;
+    --text-muted: #d4d4d4;
+    --text-light: #a3a3a3;
+    --border-color: #262626;
     background-color: var(--bg-color);
     color: var(--text-main);
 }
 
-body.dark-mode .dropdown-item:hover {
-    background-color: rgba(255, 255, 255, 0.1);
+body.dark-mode #root {
+    background-color: #000000;
+    box-shadow: none;
 }
 
+body.dark-mode .view {
+    background-color: #000000;
+}
 
+body.dark-mode .dropdown-item:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
 
 body.dark-mode .glass-panel {
-    background: rgba(30, 30, 30, 0.85);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.95);
+    border-bottom: 1px solid #262626;
 }
 
 body.dark-mode .settings-dropdown,
 body.dark-mode .parking-sheet {
-    background: var(--surface);
-    color: var(--text-main);
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    background: #000000;
+    color: #ffffff;
+    border-top: 1px solid #262626;
 }
 
 body.dark-mode .search-container {
-    background: #1e1e1e;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: #0a0a0a;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.8);
+    border: 1px solid #262626;
 }
 
 body.dark-mode input[type="text"],
 body.dark-mode input {
-    background: #2d2d2d !important;
-    color: #f8fafc !important;
-    border-color: #444 !important;
+    background: #1a1a1a !important;
+    color: #ffffff !important;
+    border-color: #333 !important;
 }
 
 body.dark-mode img[alt="Welcome"] {

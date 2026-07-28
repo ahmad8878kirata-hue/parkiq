@@ -73,17 +73,17 @@ const Results = () => {
         })
         .slice(0, 10);
 
-    // Determine best transport mode: which mode has the cheapest option available
+    // Determine best transport mode: which mode has the fastest total trip time
     const bestMode = (() => {
         const modeKeys = ['train', 'bus', 'bicycle'];
         const modeHasFlag = { train: 'hasTrainStop', bus: 'hasBusStop', bicycle: 'hasBikeStop' };
         let best = null;
-        let bestCost = Infinity;
+        let bestTime = Infinity;
         for (const mode of modeKeys) {
             const available = routeOptions.filter(o => o[modeHasFlag[mode]]);
             if (available.length === 0) continue;
-            const cheapest = Math.min(...available.map(o => parseFloat(o.totalCost) || Infinity));
-            if (cheapest < bestCost) { bestCost = cheapest; best = mode; }
+            const fastest = Math.min(...available.map(o => parseInt(o.totalTime) || 999));
+            if (fastest < bestTime) { bestTime = fastest; best = mode; }
         }
         return best;
     })();
@@ -93,6 +93,10 @@ const Results = () => {
     const [loading, setLoading] = useState(true);
     const [loadingRoute, setLoadingRoute] = useState(false);
     const [error, setError] = useState(null);
+    const [isNavigating, setIsNavigating] = useState(false);
+    const [currentStep, setCurrentStep] = useState(0);
+    const navLayersRef = useRef([]);
+    const navPulseRef = useRef(null);
 
     const destination = locationState.state?.destination || 'Stuttgart Zentrum';
     const startLocation = locationState.state?.startLocation || 'Your Location';
@@ -252,17 +256,18 @@ const Results = () => {
         bounds.extend(startCoords);
 
         if (routeData.segments && routeData.segments.length > 0) {
-            routeData.segments.forEach((seg) => {
+            let stepNum = 1;
+            routeData.segments.forEach((seg, segIdx) => {
                 const mode = seg.mode || 'driving';
                 if (!seg.path || seg.path.length < 2) return;
                 seg.path.forEach(pt => bounds.extend(pt));
 
-                let modeColor, modeKey, glowColor, lineWeight;
-                if (mode === 'driving') { modeColor = '#1e293b'; modeKey = 'driving'; glowColor = 'rgba(30,41,59,0.25)'; lineWeight = 6; }
-                else if (mode === 'walking') { modeColor = '#16a34a'; modeKey = 'walking'; glowColor = 'rgba(22,163,74,0.2)'; lineWeight = 5; }
-                else if (mode === 'transit' || mode === 'train') { modeColor = '#e11d48'; modeKey = 'train'; glowColor = 'rgba(225,29,72,0.2)'; lineWeight = 6; }
-                else if (mode === 'bus') { modeColor = '#2563eb'; modeKey = 'bus'; glowColor = 'rgba(37,99,235,0.2)'; lineWeight = 6; }
-                else if (mode === 'cycling') { modeColor = '#16a34a'; modeKey = 'cycling'; glowColor = 'rgba(22,163,74,0.2)'; lineWeight = 5; }
+                let modeColor, modeKey, glowColor, lineWeight, dashArray, modeLabel;
+                if (mode === 'driving') { modeColor = '#64748b'; modeKey = 'driving'; glowColor = 'rgba(100,116,139,0.25)'; lineWeight = 6; dashArray = ''; modeLabel = 'Drive'; }
+                else if (mode === 'walking') { modeColor = '#0ea5e9'; modeKey = 'walking'; glowColor = 'rgba(14,165,233,0.2)'; lineWeight = 4; dashArray = '4, 8'; modeLabel = 'Walk'; }
+                else if (mode === 'transit' || mode === 'train') { modeColor = '#e11d48'; modeKey = 'train'; glowColor = 'rgba(225,29,72,0.2)'; lineWeight = 7; dashArray = ''; modeLabel = 'Train'; }
+                else if (mode === 'bus') { modeColor = '#7c3aed'; modeKey = 'bus'; glowColor = 'rgba(124,58,237,0.2)'; lineWeight = 6; dashArray = '12, 6'; modeLabel = 'Bus'; }
+                else if (mode === 'cycling') { modeColor = '#f59e0b'; modeKey = 'cycling'; glowColor = 'rgba(245,158,11,0.2)'; lineWeight = 5; dashArray = '16, 8'; modeLabel = 'Cycle'; }
 
                 const glow = L.polyline(seg.path, {
                     color: glowColor || modeColor, weight: lineWeight + 8, opacity: 0.35,
@@ -271,31 +276,33 @@ const Results = () => {
                 layers.push(glow);
 
                 if (modeColor) {
-                    const dashOpts = mode === 'walking' ? { dashArray: '6, 8' } : {};
+                    const dashOpts = dashArray ? { dashArray } : {};
                     const poly = L.polyline(seg.path, {
                         color: modeColor, weight: lineWeight, opacity: 0.9,
                         lineCap: 'round', lineJoin: 'round', ...dashOpts
                     }).addTo(map);
                     layers.push(poly);
-
-                    const svgContent = iconSvgCache.current[modeKey] || '';
-                    const iconHtml = `<div class="route-icon-node ${modeKey}">${svgContent}</div>`;
-                    L.marker(seg.path[0], {
-                        icon: L.divIcon({ className: 'custom-route-icon', html: iconHtml, iconSize: [26, 26] })
-                    }).addTo(map);
                 }
 
-                const midIdx = Math.floor(seg.path.length / 2);
-                const svgIcon = iconSvgCache.current[modeKey] || '';
-                const labelHtml = `<div class="label-inner"><span class="label-icon">${svgIcon}</span><span class="label-duration">${seg.durationMin || 15} min</span></div>`;
+                const stepColor = modeColor || '#64748b';
+                const stepHtml = `<div class="step-number-marker" style="background:${stepColor};color:#fff;width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:11px;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">${stepNum}</div>`;
+                const stepMarker = L.marker(seg.path[0], {
+                    icon: L.divIcon({ className: 'custom-route-icon', html: stepHtml, iconSize: [24, 24] })
+                }).addTo(map);
+                layers.push(stepMarker);
 
-                L.marker(seg.path[midIdx], {
+                const endHtml = `<div class="step-label-bubble" style="background:${stepColor};color:#fff;padding:3px 8px;border-radius:6px;font-weight:700;font-size:10px;white-space:nowrap;box-shadow:0 2px 4px rgba(0,0,0,0.25);display:flex;align-items:center;gap:4px;">Step ${stepNum}: ${modeLabel} ${seg.durationMin || ''} min</div>`;
+                const midIdx = Math.floor(seg.path.length / 2);
+                const labelMarker = L.marker(seg.path[midIdx], {
                     icon: L.divIcon({
                         className: 'route-label-node',
-                        html: labelHtml,
-                        iconSize: [80, 24]
+                        html: endHtml,
+                        iconSize: [100, 24]
                     })
                 }).addTo(map);
+                layers.push(labelMarker);
+
+                stepNum++;
             });
         }
 
@@ -330,14 +337,113 @@ const Results = () => {
     }, [routeData]);
 
     const handleEmailReservation = (parkingName) => {
-        const subject = `Reservation Request: ${parkingName}`;
-        const body = `Hello Customer Service,\n\nI would like to make a reservation for ${parkingName}.\n\n${hasDauerparkticket ? `Dauerparkticket Station: ${dauerparkticketStation}` : 'Guest'}\n\nPlease confirm availability.`;
-        window.location.href = `mailto:service@parkiq.example.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        window.open('https://www.pbw.de/reservieren', '_blank');
     };
 
     const handleStartNavigation = () => {
-        window.open(`https://www.google.com/maps/dir/?api=1&origin=${startCoords[0]},${startCoords[1]}&destination=${encodeURIComponent(destination)}&travelmode=transit`, '_blank');
+        setIsNavigating(true);
+        setCurrentStep(0);
+        setIsExpanded(false);
     };
+
+    const handleStopNavigation = () => {
+        setIsNavigating(false);
+        setCurrentStep(0);
+        navLayersRef.current.forEach(l => l.remove());
+        navLayersRef.current = [];
+        if (navPulseRef.current) { navPulseRef.current.remove(); navPulseRef.current = null; }
+        if (mapInstance.current && routeData) {
+            const bounds = L.latLngBounds([]);
+            bounds.extend(startCoords);
+            routeData.segments.forEach(s => s.path?.forEach(pt => bounds.extend(pt)));
+            bounds.extend([routeData.lat, routeData.lng]);
+            mapInstance.current.fitBounds(bounds, { padding: [50, 100] });
+        }
+        setIsExpanded(true);
+    };
+
+    const handleNextStep = () => {
+        if (routeData && currentStep < routeData.segments.length - 1) {
+            setCurrentStep(prev => prev + 1);
+        }
+    };
+
+    const handlePrevStep = () => {
+        if (currentStep > 0) setCurrentStep(prev => prev - 1);
+    };
+
+    const MODE_COLORS = {
+        driving: '#64748b', walking: '#0ea5e9', train: '#e11d48',
+        transit: '#e11d48', bus: '#7c3aed', cycling: '#f59e0b'
+    };
+    const MODE_LABELS = {
+        driving: 'Drive', walking: 'Walk', train: 'Take Train',
+        transit: 'Take Train', bus: 'Take Bus', cycling: 'Cycle'
+    };
+
+    useEffect(() => {
+        const map = mapInstance.current;
+        if (!map || !isNavigating || !routeData?.segments?.length) return;
+
+        navLayersRef.current.forEach(l => l.remove());
+        navLayersRef.current = [];
+        if (navPulseRef.current) { navPulseRef.current.remove(); navPulseRef.current = null; }
+
+        const seg = routeData.segments[currentStep];
+        if (!seg || !seg.path || seg.path.length < 2) return;
+
+        const color = MODE_COLORS[seg.mode] || '#64748b';
+
+        const glow = L.polyline(seg.path, {
+            color, weight: 14, opacity: 0.2,
+            lineCap: 'round', lineJoin: 'round'
+        }).addTo(map);
+        navLayersRef.current.push(glow);
+
+        const isWalking = seg.mode === 'walking';
+        const dashArr = isWalking ? { dashArray: '6, 10' } : {};
+        const poly = L.polyline(seg.path, {
+            color, weight: 7, opacity: 0.95,
+            lineCap: 'round', lineJoin: 'round', ...dashArr
+        }).addTo(map);
+        navLayersRef.current.push(poly);
+
+        const startPos = seg.path[0];
+        const pulseHtml = `<div class="nav-pulse-marker" style="width:32px;height:32px;position:relative;">
+            <div style="position:absolute;inset:0;border-radius:50%;background:${color};opacity:0.3;animation:navPulseRing 2s ease-out infinite;"></div>
+            <div style="position:absolute;top:6px;left:6px;width:20px;height:20px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.4);"></div>
+        </div>`;
+        navPulseRef.current = L.marker(startPos, {
+            icon: L.divIcon({ className: 'nav-pulse-container', html: pulseHtml, iconSize: [32, 32] })
+        }).addTo(map);
+
+        const stepNum = currentStep + 1;
+        const startLabel = `<div style="background:${color};color:#fff;padding:4px 10px;border-radius:8px;font-weight:800;font-size:11px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.3);">Step ${stepNum}</div>`;
+        navLayersRef.current.push(L.marker(startPos, {
+            icon: L.divIcon({ className: 'nav-label', html: startLabel, iconSize: [60, 24] })
+        }).addTo(map));
+
+        const endPos = seg.path[seg.path.length - 1];
+        const endLabelHtml = `<div style="background:#fff;color:${color};padding:4px 10px;border-radius:8px;font-weight:700;font-size:10px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.2);border:2px solid ${color};">
+            ${currentStep < routeData.segments.length - 1 ? 'Next →' : 'Destination'}
+        </div>`;
+        navLayersRef.current.push(L.marker(endPos, {
+            icon: L.divIcon({ className: 'nav-end-label', html: endLabelHtml, iconSize: [80, 24] })
+        }).addTo(map));
+
+        const bounds = L.latLngBounds(seg.path);
+        map.fitBounds(bounds, { padding: [80, 80], maxZoom: 16 });
+    }, [isNavigating, currentStep, routeData]);
+
+    const navModeMeta = routeData?.segments?.[currentStep] ? {
+        mode: routeData.segments[currentStep].mode,
+        color: MODE_COLORS[routeData.segments[currentStep].mode] || '#64748b',
+        label: MODE_LABELS[routeData.segments[currentStep].mode] || 'Travel',
+        duration: routeData.segments[currentStep].durationMin || 0,
+        from: routeData.segments[currentStep].fromStop || routeData.segments[currentStep].stopName || '',
+        to: routeData.segments[currentStep].toStop || routeData.segments[currentStep].stopName || '',
+        details: routeData.segments[currentStep].label || ''
+    } : null;
 
     const renderIcon = (mode) => {
         const commonProps = { weight: 'fill', size: 20 };
@@ -400,15 +506,58 @@ const Results = () => {
                 <>
                     <div ref={mapRef} className="main-map" />
 
-                    <div className="results-top">
-                        <div className="results-top-row">
-                            <button className="icon-btn bg-white shadow-sm" onClick={() => navigate(-1)}><ArrowLeft weight="bold" /></button>
-                            <div className="destination-pill bg-white shadow-sm"><MapPin weight="fill" className="text-primary" /><span>{destination}</span></div>
-                            <div style={{width: '40px'}}></div>
+                    {!isNavigating ? (
+                        <div className="results-top">
+                            <div className="results-top-row">
+                                <button className="icon-btn bg-white shadow-sm" onClick={() => navigate(-1)}><ArrowLeft weight="bold" /></button>
+                                <div className="destination-pill bg-white shadow-sm"><MapPin weight="fill" className="text-primary" /><span>{destination}</span></div>
+                                <div style={{width: '40px'}}></div>
+                            </div>
+                            {renderModeTabs()}
                         </div>
-                        {renderModeTabs()}
-                    </div>
+                    ) : (
+                        <div className="nav-overlay-top">
+                            <div className="nav-step-progress">
+                                <div className="nav-progress-bar">
+                                    <div className="nav-progress-fill" style={{ width: `${((currentStep + 1) / routeData.segments.length) * 100}%` }}></div>
+                                </div>
+                                <span className="nav-step-counter">Step {currentStep + 1} of {routeData.segments.length}</span>
+                            </div>
+                            {navModeMeta && (
+                                <div className="nav-step-card" style={{ borderLeft: `4px solid ${navModeMeta.color}` }}>
+                                    <div className="nav-step-info">
+                                        <div className="nav-step-mode" style={{ color: navModeMeta.color }}>{navModeMeta.label}</div>
+                                        <div className="nav-step-duration">{navModeMeta.duration} min</div>
+                                    </div>
+                                    <div className="nav-step-detail">
+                                        {navModeMeta.from && <span>From: {navModeMeta.from}</span>}
+                                        {navModeMeta.to && navModeMeta.from && <span> → </span>}
+                                        {navModeMeta.to && <span>To: {navModeMeta.to}</span>}
+                                    </div>
+                                </div>
+                            )}
+                            <div className="nav-controls">
+                                <button className="nav-btn nav-btn-stop" onClick={handleStopNavigation}>
+                                    <ArrowLeft weight="bold" size={16} /> Exit
+                                </button>
+                                <div className="nav-step-dots">
+                                    {routeData.segments.map((_, i) => (
+                                        <div key={i} className={`nav-dot ${i === currentStep ? 'active' : ''} ${i < currentStep ? 'done' : ''}`}></div>
+                                    ))}
+                                </div>
+                                <div className="nav-btn-group">
+                                    <button className="nav-btn nav-btn-prev" onClick={handlePrevStep} disabled={currentStep === 0}>← Prev</button>
+                                    {currentStep < routeData.segments.length - 1 ? (
+                                        <button className="nav-btn nav-btn-next" onClick={handleNextStep}>Next →</button>
+                                    ) : (
+                                        <button className="nav-btn nav-btn-next nav-btn-arrived" onClick={handleStopNavigation}>Arrived!</button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
+                    {!isNavigating && (
                     <div className={`bottom-sheet ${isExpanded ? 'expanded' : ''}`}>
                         <div
                             className="drag-handle-container"
@@ -450,14 +599,14 @@ const Results = () => {
                                                 <div className="font-bold">{opt.parkingName}<span className={`category-tag ${opt.category?.toLowerCase() || 'public'}`}>{opt.category || 'Public'}</span></div>
                                                 <div className="price-container">
                                                     <div className={`font-bold text-primary ${dauerparkFree ? 'badge-free' : displayPrice.className}`}>
-                                                        {dauerparkFree ? 'Free Parking' : (transitFree ? 'Free Transit' : displayPrice.label)}
+                                                        {dauerparkFree ? 'Free Parking' : displayPrice.label}
                                                     </div>
                                                 </div>
                                             </div>
                                             <div className="option-details">
                                                 <div className="flex-between text-sm text-muted">
                                                     <div>{opt.totalTime}</div>
-                                                    {!displayPrice.isFree && !transitFree && !dauerparkFree && <div>Save €{opt.savings}</div>}
+                                                    {!displayPrice.isFree && !dauerparkFree && <div>Save €{opt.savings}</div>}
                                                     {transitFree && <div className="text-success">Job-Ticket active</div>}
                                                     {dauerparkFree && <div className="text-success">Dauerparkticket: Station</div>}
                                                 </div>
@@ -503,10 +652,16 @@ const Results = () => {
                                         )}
                                         {selectedParking && (() => {
                                             const pd = getParkingDisplayPricing(selectedParking);
-                                            return (pd.isFree || isNearDauerparkticketStation) ? (
-                                                <div className="text-center mb-4"><span className="badge-free-badge">{isNearDauerparkticketStation ? 'Free - Dauerparkticket' : pd.label}</span></div>
-                                            ) : (
-                                                <div className="text-center text-sm mb-4 font-bold">{pd.label}</div>
+                                            if (isNearDauerparkticketStation) {
+                                                return <div className="text-center mb-4"><span className="badge-free-badge">Free - Dauerparkticket</span></div>;
+                                            }
+                                            if (pd.isFree) {
+                                                return <div className="text-center mb-4"><span className="badge-free-badge">{pd.label}</span></div>;
+                                            }
+                                            return (
+                                                <div className="text-center mb-4 parking-rate-display">
+                                                    <span className="badge-paid-display">{pd.label}</span>
+                                                </div>
                                             );
                                         })()}
                                     </div>
@@ -530,13 +685,14 @@ const Results = () => {
                                             </div>
                                         ))}
                                     </div>
-                                    {hasDauerparkticket && <button className="btn btn-outline w-100 mt-6 mb-2" onClick={() => handleEmailReservation(routeData.parkingName)}>Request Reservation</button>}
+                                    <button className="btn btn-outline w-100 mt-6 mb-2" onClick={() => handleEmailReservation(routeData.parkingName)}>Parkplatz Reservation</button>
                                     <button className="btn btn-primary btn-large w-100 mb-4 shadow-glow" onClick={handleStartNavigation}>Start Navigation</button>
                                 </div>
                             )}
 
                         </div>
                     </div>
+                    )}
                 </>
             )}
         </div>

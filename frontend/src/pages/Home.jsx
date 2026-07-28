@@ -5,6 +5,8 @@ import { List, Car, CaretRight, House, Briefcase, Barbell, FirstAid, MagnifyingG
 import L from 'leaflet';
 import './Home.css';
 import './Search.css';
+import '../components/AutocompleteInput.css';
+import AutocompleteInput from '../components/AutocompleteInput';
 
 const API_BASE = 'http://localhost:5000';
 
@@ -26,6 +28,9 @@ const Home = () => {
     const [editingLocation, setEditingLocation] = useState(false);
     const isPickingLocationRef = useRef(false);
     const [startCoords, setStartCoords] = useState([48.7758, 9.1829]);
+    const startCoordsRef = useRef(startCoords);
+    const startAutocompleteRef = useRef(false);
+    const destAutocompleteRef = useRef(false);
     const [destCoords, setDestCoords] = useState(null);
     const [destStatus, setDestStatus] = useState('');
     const destMarkerRef = useRef(null);
@@ -108,8 +113,8 @@ const Home = () => {
         for (let i = 1; i <= dim; i++) {
             const past = searchIsPastDay(i);
             days.push(
-                <div 
-                    key={`curr-${i}`} 
+                <div
+                    key={`curr-${i}`}
                     className={`day ${past ? 'disabled' : ''} ${searchActiveDay === i ? 'active' : ''}`}
                     onClick={() => { if (!past) { setSearchActiveDay(i); setSearchTimeConfirmed(false); } }}
                 >
@@ -127,6 +132,16 @@ const Home = () => {
         let finalStartName = searchStartLocation;
         let finalDestCoords = destCoords;
 
+        // Use autocomplete-selected coordinates if available
+        if (startAutocompleteRef.current) {
+            finalStartCoords = startCoords;
+            finalStartName = searchStartLocation;
+        }
+        if (destAutocompleteRef.current) {
+            finalDestCoords = destCoords;
+            finalDestName = searchDestination;
+        }
+
         try {
             if (!finalDestCoords) {
                 const destRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(searchDestination)}&limit=1`);
@@ -137,12 +152,17 @@ const Home = () => {
                 }
             }
 
-            if (searchStartLocation && searchStartLocation !== 'Stuttgart' && searchStartLocation !== 'Your Location') {
-                const startRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(searchStartLocation)}&limit=1`);
-                const startData = await startRes.json();
-                if (startData.features && startData.features.length > 0) {
-                    finalStartCoords = [startData.features[0].geometry.coordinates[1], startData.features[0].geometry.coordinates[0]];
-                    finalStartName = startData.features[0].properties.name || searchStartLocation;
+            if (!startAutocompleteRef.current && searchStartLocation && searchStartLocation !== 'Stuttgart' && searchStartLocation !== 'Your Location') {
+                if (searchStartLocation === locationStatus || searchStartLocation === 'My Location') {
+                    finalStartCoords = startCoordsRef.current;
+                    finalStartName = locationStatus || searchStartLocation;
+                } else {
+                    const startRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(searchStartLocation)}&limit=1`);
+                    const startData = await startRes.json();
+                    if (startData.features && startData.features.length > 0) {
+                        finalStartCoords = [startData.features[0].geometry.coordinates[1], startData.features[0].geometry.coordinates[0]];
+                        finalStartName = startData.features[0].properties.name || searchStartLocation;
+                    }
                 }
             }
         } catch (e) {
@@ -246,7 +266,7 @@ const Home = () => {
                 (pos) => {
                     const ll = [pos.coords.latitude, pos.coords.longitude];
                     initMap(ll, 14);
-                    setLocationStatus('');
+                    setLocationStatus('My Location');
                     setStartCoords(ll);
                 },
                 () => {
@@ -331,344 +351,356 @@ const Home = () => {
                     }
                 } catch { setLocationStatus('My Location'); }
             },
-            () => {},
+            () => { },
             { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
         );
     }, [locationEnabled]);
 
-// Update map tiles when dark mode changes
-useEffect(() => {
-    if (tileLayerRef.current) {
-        const url = darkMode
-            ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-            : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
-        tileLayerRef.current.setUrl(url);
-    }
-}, [darkMode]);
+    // Keep ref in sync with startCoords for use in async callbacks
+    useEffect(() => { startCoordsRef.current = startCoords; }, [startCoords]);
 
-const touchStartY = useRef(0);
-const handleTouchStart = (e) => { touchStartY.current = e.touches ? e.touches[0].clientY : e.clientY; };
-const handleTouchMove = (e) => {
-    if (!sheetExpanded) return;
-    const currentY = e.touches ? e.touches[0].clientY : e.clientY;
-    if (currentY - touchStartY.current > 40) {
-        setSheetExpanded(false);
-        setTimeout(() => setSelectedParking(null), 300);
-    }
-};
+    // Update map tiles when dark mode changes
+    useEffect(() => {
+        if (tileLayerRef.current) {
+            const url = darkMode
+                ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+                : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+            tileLayerRef.current.setUrl(url);
+        }
+    }, [darkMode]);
 
-return (
-    <div className="view">
-        <div ref={mapRef} className="background-map" />
-        <div className="map-overlay" />
+    const touchStartY = useRef(0);
+    const handleTouchStart = (e) => { touchStartY.current = e.touches ? e.touches[0].clientY : e.clientY; };
+    const handleTouchMove = (e) => {
+        if (!sheetExpanded) return;
+        const currentY = e.touches ? e.touches[0].clientY : e.clientY;
+        if (currentY - touchStartY.current > 40) {
+            setSheetExpanded(false);
+            setTimeout(() => setSelectedParking(null), 300);
+        }
+    };
 
-        <div className="top-nav glass-panel">
-            <div style={{ position: 'relative' }}>
-                <button className="icon-btn" onClick={() => setSettingsOpen(!settingsOpen)}>
-                    <DotsThreeVertical weight="bold" size={24} />
-                </button>
-                {settingsOpen && (
-                    <div className="settings-dropdown" style={{ position: 'absolute', top: '100%', left: 0, background: 'var(--surface)', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', padding: '0.5rem', zIndex: 100, minWidth: '200px' }}>
-                        <div className="dropdown-item" onClick={() => {
-                            const newDark = !darkMode;
-                            setDarkMode(newDark);
-                            if (newDark) document.body.classList.add('dark-mode');
-                            else document.body.classList.remove('dark-mode');
-                            setSettingsOpen(false);
-                        }}>
-                            {darkMode ? '☀️ Light Mode' : '🌙 Dark Mode'}
+    return (
+        <div className="view">
+            <div ref={mapRef} className="background-map" />
+            <div className="map-overlay" />
+
+            <div className="top-nav glass-panel">
+                <div style={{ position: 'relative' }}>
+                    <button className="icon-btn" onClick={() => setSettingsOpen(!settingsOpen)}>
+                        <DotsThreeVertical weight="bold" size={24} />
+                    </button>
+                    {settingsOpen && (
+                        <div className="settings-dropdown" style={{ position: 'absolute', top: '100%', left: 0, background: 'var(--surface)', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', padding: '0.5rem', zIndex: 100, minWidth: '200px' }}>
+                            <div className="dropdown-item" onClick={() => {
+                                const newDark = !darkMode;
+                                setDarkMode(newDark);
+                                if (newDark) document.body.classList.add('dark-mode');
+                                else document.body.classList.remove('dark-mode');
+                                setSettingsOpen(false);
+                            }}>
+                                {darkMode ? '☀️ Light Mode' : '🌙 Dark Mode'}
+                            </div>
+                            <div className="dropdown-item" onClick={() => { setPrivacyModalOpen(true); setSettingsOpen(false); }}>
+                                🔒 Privacy Settings
+                            </div>
+                            <div className="dropdown-item" onClick={() => { setProfileModalOpen(true); setSettingsOpen(false); }}>
+                                ℹ️ Info &amp; Hilfe
+                            </div>
+
                         </div>
-                        <div className="dropdown-item" onClick={() => { setPrivacyModalOpen(true); setSettingsOpen(false); }}>
-                            🔒 Privacy Settings
-                        </div>
-                        <div className="dropdown-item" onClick={() => { setProfileModalOpen(true); setSettingsOpen(false); }}>
-                            ℹ️ Info &amp; Hilfe
-                        </div>
-
-                    </div>
-                )}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                <div style={{ fontWeight: 700, color: 'var(--primary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                    {parkingType === 'kurz' ? 'Short-term' : 'Permanent'}
+                    )}
                 </div>
-                {editingLocation ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--primary)', color: 'white', padding: '0.4rem 1rem', borderRadius: '2rem', fontSize: '0.875rem', fontWeight: 'bold', boxShadow: '0 4px 10px rgba(244, 63, 94, 0.3)' }}>
-                        Tap anywhere on map
-                        <button onClick={() => { setEditingLocation(false); isPickingLocationRef.current = false; }} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', cursor: 'pointer', marginLeft: '0.5rem', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X weight="bold" /></button>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    <div style={{ fontWeight: 700, color: 'var(--primary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        {parkingType === 'kurz' ? 'Short-term' : 'Permanent'}
                     </div>
-                ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-                        <div style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '0.9rem' }}>
-                            {locationStatus || 'Set your departure point'}
+                    {editingLocation ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--primary)', color: 'white', padding: '0.4rem 1rem', borderRadius: '2rem', fontSize: '0.875rem', fontWeight: 'bold', boxShadow: '0 4px 10px rgba(244, 63, 94, 0.3)' }}>
+                            Tap anywhere on map
+                            <button onClick={() => { setEditingLocation(false); isPickingLocationRef.current = false; }} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', cursor: 'pointer', marginLeft: '0.5rem', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X weight="bold" /></button>
                         </div>
-                        <button
-                            onClick={() => { setEditingLocation(true); isPickingLocationRef.current = true; }}
-                            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--surface)', border: '1px solid var(--border-color)', color: 'var(--primary)', padding: '0.3rem 0.75rem', borderRadius: '1rem', fontSize: '0.75rem', fontWeight: '600', cursor: 'pointer', boxShadow: 'var(--shadow-sm)' }}
-                        >
-                            <Pencil weight="bold" /> Change My Location
-                        </button>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
+                            <div style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '0.9rem' }}>
+                                {locationStatus || 'Set your departure point'}
+                            </div>
+                            <button
+                                onClick={() => { setEditingLocation(true); isPickingLocationRef.current = true; }}
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--surface)', border: '1px solid var(--border-color)', color: 'var(--primary)', padding: '0.3rem 0.75rem', borderRadius: '1rem', fontSize: '0.75rem', fontWeight: '600', cursor: 'pointer', boxShadow: 'var(--shadow-sm)' }}
+                            >
+                                <Pencil weight="bold" /> Change My Location
+                            </button>
+                        </div>
+                    )}
+                </div>
+                <div style={{ width: '40px' }}></div>
+            </div>
+
+            <div className="top-park-btn-container" style={{ position: 'absolute', top: '5rem', right: '1rem', zIndex: 20 }}>
+                <button className="btn btn-primary shadow-glow" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }} style={{ padding: '0.6rem 1.2rem', borderRadius: '1.5rem 1.5rem 1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.875rem', fontWeight: '600' }}>
+                    <span>Park & Ride</span>
+                    <CaretRight weight="bold" />
+                </button>
+                {destCoords && (
+                    <div style={{ fontSize: '0.65rem', color: 'var(--primary)', marginTop: '0.25rem', textAlign: 'right', fontWeight: 500, background: 'rgba(244,63,94,0.1)', borderRadius: '0.5rem', padding: '0.2rem 0.5rem' }}>
+                        → {destStatus || 'Selected'}
                     </div>
                 )}
             </div>
-            <div style={{ width: '40px' }}></div>
-        </div>
 
-        <div className="top-park-btn-container" style={{ position: 'absolute', top: '5rem', right: '1rem', zIndex: 20 }}>
-            <button className="btn btn-primary shadow-glow" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }} style={{ padding: '0.6rem 1.2rem', borderRadius: '1.5rem 1.5rem 1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.875rem', fontWeight: '600' }}>
-                <span>Park & Ride</span>
-                <CaretRight weight="bold" />
-            </button>
-            {destCoords && (
-                <div style={{ fontSize: '0.65rem', color: 'var(--primary)', marginTop: '0.25rem', textAlign: 'right', fontWeight: 500, background: 'rgba(244,63,94,0.1)', borderRadius: '0.5rem', padding: '0.2rem 0.5rem' }}>
-                    → {destStatus || 'Selected'}
+            {/* Parking Detail Bottom Sheet */}
+            {selectedParking && (
+                <div className={`parking-sheet-overlay ${sheetExpanded ? 'visible' : ''}`} onClick={() => setSheetExpanded(false)}>
+                    <div className={`parking-sheet ${sheetExpanded ? 'expanded' : ''}`} onClick={e => e.stopPropagation()}>
+                        <div
+                            className="parking-sheet-handle"
+                            onClick={() => setSheetExpanded(false)}
+                            onTouchStart={handleTouchStart}
+                            onTouchMove={handleTouchMove}
+                            onMouseDown={handleTouchStart}
+                            onMouseMove={(e) => { if (e.buttons === 1) handleTouchMove(e); }}
+                            style={{ cursor: 'grab', padding: '12px 0', width: '100%', display: 'flex', justifyContent: 'center' }}
+                        >
+                            <div className="sheet-handle-bar" style={{ background: '#94a3b8', width: '48px', height: '5px', borderRadius: '4px' }}></div>
+                        </div>
+                        <div className="parking-sheet-content">
+                            <div className="parking-sheet-header">
+                                <h3 className="parking-sheet-title">{selectedParking.name}</h3>
+                                <button className="icon-btn sheet-close" onClick={() => { setSelectedParking(null); setSheetExpanded(false); }}><X weight="bold" /></button>
+                            </div>
+                            {selectedParking.address && <div className="parking-sheet-address">{selectedParking.address}</div>}
+                            <div className="parking-sheet-stats">
+                                <div className="ps-stat">
+                                    <Car weight="fill" className="ps-stat-icon" />
+                                    <div className="ps-stat-label">Capacity</div>
+                                    <div className="ps-stat-value">{selectedParking.totalCapacity}</div>
+                                </div>
+                                <div className="ps-stat">
+                                    <MapPin weight="fill" className="ps-stat-icon" />
+                                    <div className="ps-stat-label">Location</div>
+                                    <div className="ps-stat-value">{selectedParking.coordinates[0].toFixed(3)}, {selectedParking.coordinates[1].toFixed(3)}</div>
+                                </div>
+                                {selectedParking.amenities?.evCharging && (
+                                    <div className="ps-stat">
+                                        <ChargingStation weight="fill" className="ps-stat-icon" />
+                                        <div className="ps-stat-label">EV Charging</div>
+                                        <div className="ps-stat-value">Available</div>
+                                    </div>
+                                )}
+                            </div>
+                            <button className="btn btn-primary w-100 mt-2" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
+                                <NavigationArrow weight="bold" className="mr-2" /> Route from here
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
-        </div>
 
-        {/* Parking Detail Bottom Sheet */}
-        {selectedParking && (
-            <div className={`parking-sheet-overlay ${sheetExpanded ? 'visible' : ''}`} onClick={() => setSheetExpanded(false)}>
-                <div className={`parking-sheet ${sheetExpanded ? 'expanded' : ''}`} onClick={e => e.stopPropagation()}>
-                    <div
-                        className="parking-sheet-handle"
-                        onClick={() => setSheetExpanded(false)}
-                        onTouchStart={handleTouchStart}
-                        onTouchMove={handleTouchMove}
-                        onMouseDown={handleTouchStart}
-                        onMouseMove={(e) => { if (e.buttons === 1) handleTouchMove(e); }}
-                        style={{ cursor: 'grab', padding: '12px 0', width: '100%', display: 'flex', justifyContent: 'center' }}
-                    >
-                        <div className="sheet-handle-bar" style={{ background: '#94a3b8', width: '48px', height: '5px', borderRadius: '4px' }}></div>
-                    </div>
-                    <div className="parking-sheet-content">
-                        <div className="parking-sheet-header">
-                            <h3 className="parking-sheet-title">{selectedParking.name}</h3>
-                            <button className="icon-btn sheet-close" onClick={() => { setSelectedParking(null); setSheetExpanded(false); }}><X weight="bold" /></button>
-                        </div>
-                        {selectedParking.address && <div className="parking-sheet-address">{selectedParking.address}</div>}
-                        <div className="parking-sheet-stats">
-                            <div className="ps-stat">
-                                <Car weight="fill" className="ps-stat-icon" />
-                                <div className="ps-stat-label">Capacity</div>
-                                <div className="ps-stat-value">{selectedParking.totalCapacity}</div>
-                            </div>
-                            <div className="ps-stat">
-                                <MapPin weight="fill" className="ps-stat-icon" />
-                                <div className="ps-stat-label">Location</div>
-                                <div className="ps-stat-value">{selectedParking.coordinates[0].toFixed(3)}, {selectedParking.coordinates[1].toFixed(3)}</div>
-                            </div>
-                            {selectedParking.amenities?.evCharging && (
-                                <div className="ps-stat">
-                                    <ChargingStation weight="fill" className="ps-stat-icon" />
-                                    <div className="ps-stat-label">EV Charging</div>
-                                    <div className="ps-stat-value">Available</div>
-                                </div>
-                            )}
-                        </div>
-<button className="btn btn-primary w-100 mt-2" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
-    <NavigationArrow weight="bold" className="mr-2" /> Route from here
-</button>
-                    </div>
-                </div>
-            </div>
-        )}
-
-        <div className="bottom-controls">
-            <div className="search-container" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
-                <MagnifyingGlass weight="bold" className="search-icon" />
-                <div className="search-text">{destStatus ? destStatus : 'Click map to set destination'}</div>
-                <button className="mic-btn" onClick={(e) => {
-                    e.stopPropagation();
-                    setDestCoords(null);
-                    setDestStatus('');
-                    destMarkerRef.current?.setOpacity(0);
-                }}>
-                    {destCoords ? <X weight="bold" /> : <MapPin weight="bold" />}
-                </button>
-            </div>
-        </div>
-
-        {showSearchSheet && (
-            <div className="search-sheet-overlay visible" onClick={() => setShowSearchSheet(false)}>
-                <div className="search-sheet" onClick={e => e.stopPropagation()}>
-                    <div className="sheet-header">
-                        <h3>Outbound journey</h3>
-                        <button className="icon-btn close-btn" onClick={() => setShowSearchSheet(false)}>
-                            <X weight="bold" />
-                        </button>
-                    </div>
-
-                    <div className="mb-4">
-                        <input 
-                            type="text" 
-                            placeholder="Starting Point"
-                            value={searchStartLocation} 
-                            onChange={(e) => setSearchStartLocation(e.target.value)}
-                            className="search-input"
-                        />
-                        <input 
-                            type="text" 
-                            placeholder="Where are you going?"
-                            value={searchDestination} 
-                            onChange={(e) => setSearchDestination(e.target.value)}
-                            autoFocus
-                            className="search-input search-input-dest"
-                        />
-                    </div>
-
-                    {!searchShowDate ? (
-                        <>
-                                    {searchTimeConfirmed ? (
-                                <div className="time-confirmed-badge">
-                                    <span className="time-confirmed-label">
-                                        {searchActiveDay === today.getDate() && searchMonth === today.getMonth() && searchYear === today.getFullYear()
-                                            ? `Heute, ${searchTime}`
-                                            : `${searchFullMonthNames[searchMonth].slice(0, 3)} ${searchActiveDay}, ${searchTime}`}
-                                    </span>
-                                    <button className="time-edit-btn" onClick={() => { setSearchTimeConfirmed(false); setSearchShowDate(true); }}>
-                                        <Pencil weight="bold" size={14} />
-                                    </button>
-                                </div>
-                            ) : (
-                                <button 
-                                    className="btn btn-outline date-btn" 
-                                    onClick={() => setSearchShowDate(true)}
-                                >
-                                    <CalendarBlank weight="bold" size={18} />
-                                    <span>Set Date & Time</span>
-                                    <span className="date-btn-value">{searchFullMonthNames[searchMonth].slice(0, 3)} {searchActiveDay}, {searchTime}</span>
-                                </button>
-                            )}
-                        </>
-                    ) : (
-                        <>
-                            <div className="dt-close-row">
-                                <button className="icon-btn close-btn" onClick={() => setSearchShowDate(false)}>
-                                    <X weight="bold" />
-                                </button>
-                            </div>
-                            <div className="datetime-content">
-                                <div className="calendar-header">
-                                    <button className="icon-btn text-muted" onClick={searchPrevMonth}>
-                                        <CaretLeft weight="bold" /> {searchMonth === 0 ? searchMonthNames[11] : searchMonthNames[searchMonth - 1]}
-                                    </button>
-                                    <span className="current-month">{searchFullMonthNames[searchMonth]} {searchYear}</span>
-                                    <button className="icon-btn text-muted" onClick={searchNextMonth}>
-                                        {searchMonth === 11 ? searchMonthNames[0] : searchMonthNames[searchMonth + 1]} <CaretRight weight="bold" />
-                                    </button>
-                                </div>
-
-                                <div className="calendar-grid">
-                                    <div className="day-name">Mo</div><div className="day-name">Tu</div><div className="day-name">We</div><div className="day-name">Th</div><div className="day-name">Fr</div><div className="day-name">Sa</div><div className="day-name">Su</div>
-                                    {searchRenderDays()}
-                                </div>
-
-                                <div className="time-picker mb-4">
-                                    <input
-                                        type="time"
-                                        value={searchTime}
-                                        onChange={(e) => { setSearchTime(e.target.value); setSearchTimeConfirmed(false); }}
-                                        className="time-input"
-                                        step="60"
-                                    />
-                                    <span className="time-display">{searchTime}</span>
-                                    <button className="btn btn-outline ml-auto now-btn" onClick={() => {
-                                        const now = new Date();
-                                        setSearchTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
-                                        setSearchActiveDay(now.getDate());
-                                        setSearchTimeConfirmed(false);
-                                    }}>Now</button>
-                                </div>
-                                <button className="btn btn-primary w-100 set-date-btn" onClick={() => { setSearchShowDate(false); setSearchTimeConfirmed(true); }}>
-                                    <span style={{ marginRight: '0.4rem' }}>✔</span> Save
-                                </button>
-                            </div>
-                        </>
-                    )}
-
-                    {selectedParking && (
-                        <div className="selected-parking-chip">
-                            <MapPin weight="fill" className="text-primary" />
-                            <span>{selectedParking.name}</span>
-                            <button className="chip-remove" onClick={() => { setSelectedParking(null); setShowSearchSheet(false); }}><X weight="bold" /></button>
-                        </div>
-                    )}
-                    {!searchShowDate && (
-                    <button 
-                        className="btn btn-primary btn-large w-100" 
-                        onClick={handleSearchAccept}
-                        disabled={loadingLocation}
-                    >
-                        {loadingLocation ? 'Finding Best Match...' : 'Find Best PBW Route'}
+            <div className="bottom-controls">
+                <div className="search-container" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
+                    <MagnifyingGlass weight="bold" className="search-icon" />
+                    <div className="search-text">{destStatus ? destStatus : 'Click map to set destination'}</div>
+                    <button className="mic-btn" onClick={(e) => {
+                        e.stopPropagation();
+                        setDestCoords(null);
+                        setDestStatus('');
+                        destMarkerRef.current?.setOpacity(0);
+                    }}>
+                        {destCoords ? <X weight="bold" /> : <MapPin weight="bold" />}
                     </button>
-                    )}
                 </div>
             </div>
-        )}
 
-        {/* Privacy Modal */}
-        {privacyModalOpen && (
-            <div className="parking-sheet-overlay visible" onClick={() => setPrivacyModalOpen(false)}>
-                <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{ padding: '2rem', height: 'auto', bottom: 0 }}>
-                    <h3 style={{ marginBottom: '0.5rem' }}>Privacy Settings</h3>
-                    <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.875rem' }}>Manage your data permissions and tracking preferences.</p>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0', borderBottom: '1px solid var(--border-color)' }}>
-                        <div>
-                            <h4 style={{ margin: '0 0 0.25rem 0' }}>Location Access</h4>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Required for routing and nearby parking</span>
+            {showSearchSheet && (
+                <div className="search-sheet-overlay visible" onClick={() => setShowSearchSheet(false)}>
+                    <div className="search-sheet" onClick={e => e.stopPropagation()}>
+                        <div className="sheet-header">
+                            <h3>Outbound journey</h3>
+                            <button className="icon-btn close-btn" onClick={() => setShowSearchSheet(false)}>
+                                <X weight="bold" />
+                            </button>
                         </div>
-                        <input type="checkbox" checked={locationEnabled} readOnly style={{ transform: 'scale(1.2)' }} />
-                    </div>
 
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0', borderBottom: '1px solid var(--border-color)' }}>
-                        <div>
-                            <h4 style={{ margin: '0 0 0.25rem 0' }}>Analytics & Usage</h4>
-                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Help us improve the ParkIQ experience</span>
+                        <div className="mb-4">
+                            <AutocompleteInput
+                                placeholder="Starting Point (e.g. Stuttgart Hbf)"
+                                value={searchStartLocation}
+                                onChange={(e) => setSearchStartLocation(e.target.value)}
+                                onSelect={(data) => {
+                                    setStartCoords(data.coordinates);
+                                    setSearchStartLocation(data.name);
+                                    startAutocompleteRef.current = true;
+                                }}
+                                className="search-input"
+                            />
+                            <AutocompleteInput
+                                placeholder="Where are you going? (e.g. Schlossplatz, Stuttgart)"
+                                value={searchDestination}
+                                onChange={(e) => setSearchDestination(e.target.value)}
+                                onSelect={(data) => {
+                                    setDestCoords(data.coordinates);
+                                    setSearchDestination(data.name);
+                                    setDestStatus(data.road || data.name.split(',')[0] || data.name);
+                                    destAutocompleteRef.current = true;
+                                }}
+                                autoFocus
+                                className="search-input search-input-dest"
+                            />
                         </div>
-                        <input type="checkbox" defaultChecked style={{ transform: 'scale(1.2)' }} />
-                    </div>
 
-                    <button className="btn btn-primary w-100" style={{ marginTop: '2rem' }} onClick={() => setPrivacyModalOpen(false)}>Save Preferences</button>
+                        {!searchShowDate ? (
+                            <>
+                                {searchTimeConfirmed ? (
+                                    <div className="time-confirmed-badge">
+                                        <span className="time-confirmed-label">
+                                            {searchActiveDay === today.getDate() && searchMonth === today.getMonth() && searchYear === today.getFullYear()
+                                                ? `Heute, ${searchTime}`
+                                                : `${searchFullMonthNames[searchMonth].slice(0, 3)} ${searchActiveDay}, ${searchTime}`}
+                                        </span>
+                                        <button className="time-edit-btn" onClick={() => { setSearchTimeConfirmed(false); setSearchShowDate(true); }}>
+                                            <Pencil weight="bold" size={14} />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button
+                                        className="btn btn-outline date-btn"
+                                        onClick={() => setSearchShowDate(true)}
+                                    >
+                                        <CalendarBlank weight="bold" size={18} />
+                                        <span>Set Date & Time</span>
+                                        <span className="date-btn-value">{searchFullMonthNames[searchMonth].slice(0, 3)} {searchActiveDay}, {searchTime}</span>
+                                    </button>
+                                )}
+                            </>
+                        ) : (
+                            <>
+                                <div className="dt-close-row">
+                                    <button className="icon-btn close-btn" onClick={() => setSearchShowDate(false)}>
+                                        <X weight="bold" />
+                                    </button>
+                                </div>
+                                <div className="datetime-content">
+                                    <div className="calendar-header">
+                                        <button className="icon-btn text-muted" onClick={searchPrevMonth}>
+                                            <CaretLeft weight="bold" /> {searchMonth === 0 ? searchMonthNames[11] : searchMonthNames[searchMonth - 1]}
+                                        </button>
+                                        <span className="current-month">{searchFullMonthNames[searchMonth]} {searchYear}</span>
+                                        <button className="icon-btn text-muted" onClick={searchNextMonth}>
+                                            {searchMonth === 11 ? searchMonthNames[0] : searchMonthNames[searchMonth + 1]} <CaretRight weight="bold" />
+                                        </button>
+                                    </div>
+
+                                    <div className="calendar-grid">
+                                        <div className="day-name">Mo</div><div className="day-name">Tu</div><div className="day-name">We</div><div className="day-name">Th</div><div className="day-name">Fr</div><div className="day-name">Sa</div><div className="day-name">Su</div>
+                                        {searchRenderDays()}
+                                    </div>
+
+                                    <div className="time-picker mb-4">
+                                        <input
+                                            type="time"
+                                            value={searchTime}
+                                            onChange={(e) => { setSearchTime(e.target.value); setSearchTimeConfirmed(false); }}
+                                            className="time-input"
+                                            step="60"
+                                        />
+                                        <span className="time-display">{searchTime}</span>
+                                        <button className="btn btn-outline ml-auto now-btn" onClick={() => {
+                                            const now = new Date();
+                                            setSearchTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
+                                            setSearchActiveDay(now.getDate());
+                                            setSearchTimeConfirmed(false);
+                                        }}>Now</button>
+                                    </div>
+                                    <button className="btn btn-primary w-100 set-date-btn" onClick={() => { setSearchShowDate(false); setSearchTimeConfirmed(true); }}>
+                                        <span style={{ marginRight: '0.4rem' }}>✔</span> Save
+                                    </button>
+                                </div>
+                            </>
+                        )}
+
+                        {selectedParking && (
+                            <div className="selected-parking-chip">
+                                <MapPin weight="fill" className="text-primary" />
+                                <span>{selectedParking.name}</span>
+                                <button className="chip-remove" onClick={() => { setSelectedParking(null); setShowSearchSheet(false); }}><X weight="bold" /></button>
+                            </div>
+                        )}
+                        {!searchShowDate && (
+                            <button
+                                className="btn btn-primary btn-large w-100"
+                                onClick={handleSearchAccept}
+                                disabled={loadingLocation}
+                            >
+                                {loadingLocation ? 'Finding Best Match...' : 'Find Best PBW Route'}
+                            </button>
+                        )}
+                    </div>
                 </div>
-            </div>
-        )}
+            )}
 
-        {/* Info & Hilfe Modal */}
-        {profileModalOpen && (
-            <div className="parking-sheet-overlay visible" onClick={() => setProfileModalOpen(false)}>
-                <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{ padding: '2rem', height: 'auto', bottom: 0, maxHeight: '85vh', overflowY: 'auto' }}>
-                    <h3 style={{ marginBottom: '1rem' }}>Info &amp; Hilfe</h3>
+            {/* Privacy Modal */}
+            {privacyModalOpen && (
+                <div className="parking-sheet-overlay visible" onClick={() => setPrivacyModalOpen(false)}>
+                    <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{ padding: '2rem', height: 'auto', bottom: 0 }}>
+                        <h3 style={{ marginBottom: '0.5rem' }}>Privacy Settings</h3>
+                        <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.875rem' }}>Manage your data permissions and tracking preferences.</p>
 
-                    <p style={{ color: 'var(--text-main)', marginBottom: '1.25rem', fontSize: '0.875rem', lineHeight: '1.6' }}>
-                        Diese App unterstützt Sie bei der Planung Ihrer nachhaltigen Mobilität mit Bus, Bahn und Fahrrad.
-                    </p>
-                    <p style={{ color: 'var(--text-main)', marginBottom: '1.25rem', fontSize: '0.875rem', lineHeight: '1.6' }}>
-                        Bei Fragen oder Problemen kontaktieren Sie uns bitte.
-                    </p>
-
-                    <div style={{ background: 'var(--bg-color)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem' }}>
-                        <div style={{ fontSize: '0.875rem', lineHeight: '1.8', color: 'var(--text-main)' }}>
-                            <div><strong>Telefon:</strong> +49 (0)711 89255-0</div>
-                            <div><strong>Telefax:</strong> +49 (0)711 89255-599</div>
-                            <div><strong>E-Mail:</strong> info@pbw</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0', borderBottom: '1px solid var(--border-color)' }}>
+                            <div>
+                                <h4 style={{ margin: '0 0 0.25rem 0' }}>Location Access</h4>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Required for routing and nearby parking</span>
+                            </div>
+                            <input type="checkbox" checked={locationEnabled} readOnly style={{ transform: 'scale(1.2)' }} />
                         </div>
+
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0', borderBottom: '1px solid var(--border-color)' }}>
+                            <div>
+                                <h4 style={{ margin: '0 0 0.25rem 0' }}>Analytics & Usage</h4>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Help us improve the ParkIQ experience</span>
+                            </div>
+                            <input type="checkbox" defaultChecked style={{ transform: 'scale(1.2)' }} />
+                        </div>
+
+                        <button className="btn btn-primary w-100" style={{ marginTop: '2rem' }} onClick={() => setPrivacyModalOpen(false)}>Save Preferences</button>
                     </div>
-
-                    <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: '1.6', marginBottom: '1.5rem' }}>
-                        <strong>Weitere Informationen:</strong> Informationen zu Angeboten für Studierende und Berufstätige finden Sie auf der PBW-Website.
-                    </p>
-
-                    <button className="btn btn-primary w-100" onClick={() => setProfileModalOpen(false)}>Schließen</button>
                 </div>
-            </div>
-        )}
+            )}
+
+            {/* Info & Hilfe Modal */}
+            {profileModalOpen && (
+                <div className="parking-sheet-overlay visible" onClick={() => setProfileModalOpen(false)}>
+                    <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{ padding: '2rem', height: 'auto', bottom: 0, maxHeight: '85vh', overflowY: 'auto' }}>
+                        <h3 style={{ marginBottom: '1rem' }}>Info &amp; Hilfe</h3>
+
+                        <p style={{ color: 'var(--text-main)', marginBottom: '1.25rem', fontSize: '0.875rem', lineHeight: '1.6' }}>
+                            Diese App unterstützt Sie bei der Planung Ihrer nachhaltigen Mobilität mit Bus, Bahn und Fahrrad.
+                        </p>
+                        <p style={{ color: 'var(--text-main)', marginBottom: '1.25rem', fontSize: '0.875rem', lineHeight: '1.6' }}>
+                            Bei Fragen oder Problemen kontaktieren Sie uns bitte unter.
+                        </p>
+
+                        <div style={{ background: 'var(--bg-color)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.25rem' }}>
+                            <div style={{ fontSize: '0.875rem', lineHeight: '1.8', color: 'var(--text-main)' }}>
+                                <div><strong>Telefon:</strong> +49 (0)711 89255-0</div>
+                                <div><strong>Telefax:</strong> +49 (0)711 89255-599</div>
+                                <div><strong>E-Mail:</strong> info@pbw</div>
+                            </div>
+                        </div>
+
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: '1.6', marginBottom: '1.5rem' }}>
+                            <strong>Weitere Informationen:</strong> Informationen zu Angeboten für Studierende und Berufstätige finden Sie auf der PBW-Website.
+                        </p>
+
+                        <button className="btn btn-primary w-100" onClick={() => setProfileModalOpen(false)}>Schließen</button>
+                    </div>
+                </div>
+            )}
 
 
 
-    </div>
-);
+        </div>
+    );
 };
 
 export default Home;

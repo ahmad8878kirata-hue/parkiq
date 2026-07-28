@@ -17,15 +17,65 @@ const MOBIDATA_PARK_API = 'https://api.mobidata-bw.de/park-api/api/public/v3/par
 const CACHE_DURATION = 5 * 60 * 1000; // 5 Minuten
 const CACHE_FILE = path.join(__dirname, 'parking_cache.json');
 
+function isGenericParkingName(name) {
+    return !name || /^(parkplatz|parken|garage|tiefgarage|parkhaus|parkdeck|p\+r|park\s*\+?\s*ride)$/i.test(name.trim());
+}
+
+function isCityOnlyAddress(address) {
+    return address && /^[A-ZÄÖÜ][a-zäöüß]+(\s+[A-ZÄÖÜ][a-zäöüß]+)?$/.test(address.trim());
+}
+
+function formatParkingType(type) {
+    const typeMap = {
+        'UNDERGROUND': 'Tiefgarage',
+        'COVERED': 'Parkdeck',
+        'OPEN': 'Parkplatz',
+        'MULTI_STOREY': 'Parkhaus',
+        'CAR_PARK': 'Parkhaus',
+        'OFF_STREET_PARKING_GROUND': 'Parkplatz',
+        'OFF_STREET_BUILDING': 'Parkhaus',
+        'ON_STREET': 'Straßenparken'
+    };
+    return typeMap[(type || '').toUpperCase()] || null;
+}
+
+function enhanceParkingName(rawName, address, siteType, description, capacity) {
+    const name = (rawName || '').trim();
+    const addr = (address || '').trim();
+
+    if (!isGenericParkingName(name)) {
+        // Name is already specific (e.g., "Parkgarage Neckartor", "Milaneo")
+        return name;
+    }
+
+    // For generic names, build a descriptive label from available data
+    const parts = [];
+    const typeName = formatParkingType(siteType);
+    parts.push(typeName || name || 'Parkplatz');
+
+    if (addr && !isCityOnlyAddress(addr)) {
+        // Has a real street address
+        parts.push(addr);
+    } else if (capacity) {
+        // No real address, add capacity hint
+        parts.push(`${capacity} spots`);
+    }
+
+    return parts.join(' - ');
+}
+
 function transformSite(site) {
     const capacity = site.capacity || 0;
     const lat = parseFloat(site.lat);
     const lon = parseFloat(site.lon);
+    const address = site.address || '';
     return {
         id: site.id,
-        name: site.name,
+        name: enhanceParkingName(site.name, address, site.type, site.description, capacity),
+        rawName: site.name,
         coordinates: [lat, lon],
-        address: site.address || '',
+        address,
+        parkingType: site.type || null,
         totalCapacity: capacity,
         freeSpaces: capacity,
         occupancyRate: 0,
@@ -39,6 +89,63 @@ function transformSite(site) {
         },
         status: 'available'
     };
+}
+
+// Cache for reverse geocoding results (coords -> street name)
+const geocodeCache = new Map();
+const GEOCODE_CACHE_MAX = 200;
+
+// Reverse geocode coordinates to get street name for generic parking entries
+async function resolveGenericParkingNames(parkings) {
+    const needsResolve = parkings.filter(p => isGenericParkingName(p.rawName || p.name));
+    if (needsResolve.length === 0) return;
+
+    // Process in batches of 3 to respect Nominatim rate limits
+    for (let i = 0; i < needsResolve.length; i += 3) {
+        const batch = needsResolve.slice(i, i + 3);
+        const promises = batch.map(async (parking) => {
+            const [lat, lon] = parking.coordinates;
+            const cacheKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+            if (geocodeCache.has(cacheKey)) {
+                const cached = geocodeCache.get(cacheKey);
+                applyResolvedName(parking, cached);
+                return;
+            }
+            try {
+                const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1&zoom=18`;
+                const res = await axios.get(url, {
+                    headers: { 'User-Agent': 'ParkIQ/1.0 (contact@parkiq.example.com)' },
+                    timeout: 3000
+                });
+                const addr = res.data?.address || {};
+                const road = addr.road || addr.pedestrian || addr.path || addr.square || '';
+                const suburb = addr.suburb || addr.neighbourhood || addr.city_district || '';
+                const city = addr.city || addr.town || addr.village || '';
+                const resolved = { road, suburb, city };
+                if (geocodeCache.size < GEOCODE_CACHE_MAX) geocodeCache.set(cacheKey, resolved);
+                applyResolvedName(parking, resolved);
+            } catch {
+                // Geocoding failed, keep the name from enhanceParkingName
+            }
+        });
+        await Promise.all(promises);
+        if (i + 3 < needsResolve.length) await new Promise(r => setTimeout(r, 350));
+    }
+}
+
+function applyResolvedName(parking, resolved) {
+    const { road, suburb, city } = resolved;
+    const typeName = formatParkingType(parking.parkingType) || (parking.rawName || parking.name || 'Parkplatz').trim();
+    const locationParts = [];
+    if (road) locationParts.push(road);
+    if (suburb && suburb !== city) locationParts.push(suburb);
+    else if (city) locationParts.push(city);
+    const location = locationParts.join(', ');
+    if (location) {
+        parking.name = `${typeName} - ${location}`;
+    } else {
+        parking.name = typeName;
+    }
 }
 
 function loadDiskCache() {
@@ -110,6 +217,7 @@ async function fetchAndCacheParking() {
         }
 
         if (allSites.length > 0) {
+            await resolveGenericParkingNames(allSites);
             parkingCache.data = allSites;
             parkingCache.lastUpdated = Date.now();
             saveDiskCache();
@@ -149,6 +257,7 @@ async function fetchParkingNear(lat, lon, radius = 5000) {
                 start = response.data.next_id || start + PAGINATION_LIMIT;
             }
         }
+        await resolveGenericParkingNames(allSites);
         return allSites;
     } catch (err) {
         console.error('MobiData BW API Error (fetchParkingNear):', err.message);
@@ -728,12 +837,20 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
             toStop: destStopName
         });
     } else if (hafasClient && (modeLabel === 'train' || modeLabel === 'bus')) {
-        // Try actual DB HAFAS journey for real public transport schedules
-        const fromId = nearStop?.stationId;
-        const toId = nearDestStop?.stationId;
-        const hafasJourney = fromId && toId
-            ? await fetchHafasJourneyById(hafasClient, fromId, toId, modeLabel)
-            : await fetchHafasJourney(hafasClient, transitFrom, transitTo, stopName, destStopName, modeLabel);
+        // Try proper HAFAS station lookup by proximity first
+        let fromHafas = await findNearestStationHafas(hafasClient, transitFrom);
+        let toHafas = await findNearestStationHafas(hafasClient, transitTo);
+
+        let hafasJourney = null;
+        if (fromHafas?.stationId && toHafas?.stationId) {
+            hafasJourney = await fetchHafasJourneyById(hafasClient, fromHafas.stationId, toHafas.stationId, modeLabel);
+        }
+
+        // Fallback to name-based HAFAS search
+        if (!hafasJourney) {
+            hafasJourney = await fetchHafasJourney(hafasClient, transitFrom, transitTo, stopName, destStopName, modeLabel);
+        }
+
         if (hafasJourney && hafasJourney.path && hafasJourney.path.length > 1) {
             segments.push({
                 mode: modeLabel === 'bus' ? 'bus' : 'train',
@@ -747,23 +864,31 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
                 arrival: hafasJourney.arrival
             });
         } else {
-            const transitResult = await fetchOSRMRoute(transitFrom, transitTo, 'driving');
+            // Distance-based transit time estimate (not OSRM driving!)
+            const transitDistKm = distanceMeters(transitFrom, transitTo) / 1000;
+            const avgSpeedKmh = modeLabel === 'bus' ? 30 : 60;
+            const estimatedMin = Math.max(3, Math.round(transitDistKm / avgSpeedKmh * 60));
+            const cappedMin = Math.min(estimatedMin, 90);
             segments.push({
                 mode: modeLabel === 'bus' ? 'bus' : 'train',
-                path: transitResult?.path || interpolatePoints(transitFrom, transitTo, 6),
+                path: interpolatePoints(transitFrom, transitTo, 8),
                 label: modeLabel === 'bus' ? 'Bus' : 'Train',
-                durationMin: transitResult?.durationMin || Math.max(1, Math.round(distanceMeters(transitFrom, transitTo) / 80)),
+                durationMin: cappedMin,
                 fromStop: stopName,
                 toStop: destStopName
             });
         }
     } else {
-        const transitResult = await fetchOSRMRoute(transitFrom, transitTo, 'driving');
+        // No HAFAS available - use distance-based estimate for transit
+        const transitDistKm = distanceMeters(transitFrom, transitTo) / 1000;
+        const avgSpeedKmh = modeLabel === 'bus' ? 30 : 60;
+        const estimatedMin = Math.max(3, Math.round(transitDistKm / avgSpeedKmh * 60));
+        const cappedMin = Math.min(estimatedMin, 90);
         segments.push({
             mode: modeLabel === 'bus' ? 'bus' : 'train',
-            path: transitResult?.path || interpolatePoints(transitFrom, transitTo, 6),
+            path: interpolatePoints(transitFrom, transitTo, 8),
             label: modeLabel === 'bus' ? 'Bus' : 'Train',
-            durationMin: transitResult?.durationMin || Math.max(1, Math.round(distanceMeters(transitFrom, transitTo) / 80)),
+            durationMin: cappedMin,
             fromStop: stopName,
             toStop: destStopName
         });
@@ -838,8 +963,15 @@ app.post('/api/routes', async (req, res) => {
         if (!originParkings.length && startCoords) {
             originParkings = await fetchParkingNear(startCoords[0], startCoords[1], 10000);
         }
-        if (!destParkings.length && !nearDest) {
-            destParkings = await fetchParkingNear(destCoords[0], destCoords[1], 10000);
+        if (!destParkings.length) {
+            if (!nearDest) {
+                destParkings = await fetchParkingNear(destCoords[0], destCoords[1], 10000);
+            } else {
+                loadDiskCache();
+                if (parkingCache.data?.length) {
+                    destParkings = parkingCache.data;
+                }
+            }
         }
         // Merge both sets, deduplicate by id
         const seenIds = new Set();
@@ -852,7 +984,12 @@ app.post('/api/routes', async (req, res) => {
         }
 
         if (!liveParkings.length) {
-            clearRouteTimer(); return res.status(503).json({ success: false, message: 'No live parking data available near destination' });
+            loadDiskCache();
+            if (parkingCache.data?.length) {
+                liveParkings = parkingCache.data;
+            } else {
+                clearRouteTimer(); return res.status(503).json({ success: false, message: 'No live parking data available near destination' });
+            }
         }
 
         if (parkingId) {
@@ -940,7 +1077,8 @@ app.post('/api/routes', async (req, res) => {
                     feeDescription: park.feeDescription,
                     description: park.description,
                     isFree: pricing.isFree,
-                    displayPrice: pricing.displayPrice
+                    displayPrice: pricing.displayPrice,
+                    hourlyRate: pricing.isFree ? 'Free' : pricing.displayPrice
                 }]
             });
         }
@@ -989,8 +1127,8 @@ app.post('/api/routes', async (req, res) => {
 
             // Determine which mode gives the shortest walk
             let bestMode = 'train';
-            if (bestTotalWalk === busTotalWalk) bestMode = 'bus';
-            if (bestTotalWalk === bikeTotalWalk) bestMode = 'bicycle';
+            if (busTotalWalk <= trainTotalWalk && busTotalWalk <= bikeTotalWalk) bestMode = 'bus';
+            if (bikeTotalWalk <= trainTotalWalk && bikeTotalWalk <= busTotalWalk) bestMode = 'bicycle';
 
             const hasTrain = nearTrain.length > 0 && nearTrain[0].distance < MAX_WALK_PER_SEGMENT;
             const hasBus = nearBus.length > 0 && nearBus[0].distance < MAX_WALK_PER_SEGMENT;
@@ -1001,7 +1139,16 @@ app.post('/api/routes', async (req, res) => {
             const totalWalkMeters = Math.round(bestTotalWalk === 9999 ? 500 : bestTotalWalk);
             const walkTimeMin = Math.max(1, Math.round(oneWayWalkMeters / 80));
             const totalWalkTimeMin = Math.max(1, Math.round(totalWalkMeters / 80));
-            const transitTimeEst = 20; // rough estimate for transit portion
+
+            // Calculate actual transit time based on best mode's stop-to-stop distance
+            let transitTimeEst = 20;
+            if (bestMode === 'bus' && nearBus.length > 0 && destTopBus.length > 0) {
+                const distKm = distanceMeters(nearBus[0].coordinates, destTopBus[0].coordinates) / 1000;
+                transitTimeEst = Math.max(2, Math.round(distKm / 30 * 60));
+            } else if (bestMode === 'train' && nearTrain.length > 0 && destTopTrain.length > 0) {
+                const distKm = distanceMeters(nearTrain[0].coordinates, destTopTrain[0].coordinates) / 1000;
+                transitTimeEst = Math.max(2, Math.round(distKm / 60 * 60));
+            }
 
             allOptions.push({
                 id: park.id, parkingName: park.name,
@@ -1029,7 +1176,8 @@ app.post('/api/routes', async (req, res) => {
                 feeDescription: park.feeDescription,
                 description: park.description,
                 isFree: pricing.isFree,
-                displayPrice: pricing.displayPrice
+                displayPrice: pricing.displayPrice,
+                hourlyRate: pricing.isFree ? 'Free' : pricing.displayPrice
             });
         }
 
@@ -1081,7 +1229,7 @@ app.get('/api/transit-stops', async (req, res) => {
     try {
         // Try to fetch fresh data in the background
         // Transit stops are now fetched dynamically via Overpass on demand
-        const stops = transitStopsCache.data || FALLBACK_STOPS;
+        const stops = FALLBACK_STOPS;
         const features = stops.map(s => ({
             type: 'Feature',
             geometry: { type: 'Point', coordinates: [s.coordinates[1], s.coordinates[0]] },
