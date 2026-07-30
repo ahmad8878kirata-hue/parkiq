@@ -9,8 +9,8 @@ const Search = () => {
     const navigate = useNavigate();
     const locationState = useLocation();
     const selectedParking = locationState.state?.selectedParking || null;
-    const initialLocation = locationState.state?.currentLocation || 'Stuttgart';
-    const initialCoords = locationState.state?.startCoords || [48.7758, 9.1829];
+    const initialLocation = locationState.state?.currentLocation || 'Baden-Württemberg';
+    const initialCoords = locationState.state?.startCoords || [48.6616, 9.0654];
     const initialDest = locationState.state?.destination || '';
     const initialDestCoords = locationState.state?.destCoords || null;
     const [destCoords, setDestCoords] = useState(initialDestCoords);
@@ -56,7 +56,7 @@ const Search = () => {
                 }
             }
 
-            if (!startAutocompleteRef.current && startLocation && startLocation !== 'Stuttgart' && startLocation !== 'Your Location') {
+            if (!startAutocompleteRef.current && startLocation && startLocation !== 'Baden-Württemberg' && startLocation !== 'Your Location') {
                 const startRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(startLocation)}&limit=1`);
                 const startData = await startRes.json();
                 if (startData.features && startData.features.length > 0) {

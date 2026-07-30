@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-const FETCH_TIMEOUT = 20000; // 20s
+const FETCH_TIMEOUT = 70000; // 70s
 import { useParking } from '../context/ParkingContext';
 import { ArrowLeft, MapPin, Car, PersonSimpleWalk, Train, Bus, Bicycle, CircleNotch, CaretLeft, Envelope, WarningCircle, Ticket, Check } from '@phosphor-icons/react';
 import L from 'leaflet';
@@ -98,9 +98,9 @@ const Results = () => {
     const navLayersRef = useRef([]);
     const navPulseRef = useRef(null);
 
-    const destination = locationState.state?.destination || 'Stuttgart Zentrum';
+    const destination = locationState.state?.destination || 'Baden-Württemberg Zentrum';
     const startLocation = locationState.state?.startLocation || 'Your Location';
-    const startCoords = locationState.state?.startCoords || [48.7758, 9.1829];
+    const startCoords = locationState.state?.startCoords || [48.6616, 9.0654];
     const destCoords = locationState.state?.destCoords || null;
     const arrivalTime = locationState.state?.arrivalTime;
     const parkingId = locationState.state?.parkingId || null;
@@ -153,7 +153,10 @@ const Results = () => {
                     setRouteOptions(enriched);
                 }
             } catch (err) {
-                if (err.name === 'AbortError') return; // superseded by newer request
+                if (err.name === 'AbortError') {
+                    if (!cancelled) setError('Request timed out. Please try again.');
+                    return;
+                }
                 if (!cancelled) setError(err.message);
             } finally {
                 if (!cancelled) { clearTimeout(timer); setLoading(false); }
@@ -161,7 +164,7 @@ const Results = () => {
         };
         fetchOptions();
         return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
-    }, [destination, startCoords, arrivalTime, parkingId, hasJobTicket]);
+    }, [destination, startCoords, destCoords, arrivalTime, parkingId, hasJobTicket]);
 
     // Init map with markers
     useEffect(() => {
@@ -264,7 +267,7 @@ const Results = () => {
 
                 let modeColor, modeKey, glowColor, lineWeight, dashArray, modeLabel;
                 if (mode === 'driving') { modeColor = '#64748b'; modeKey = 'driving'; glowColor = 'rgba(100,116,139,0.25)'; lineWeight = 6; dashArray = ''; modeLabel = 'Drive'; }
-                else if (mode === 'walking') { modeColor = '#0ea5e9'; modeKey = 'walking'; glowColor = 'rgba(14,165,233,0.2)'; lineWeight = 4; dashArray = '4, 8'; modeLabel = 'Walk'; }
+                else if (mode === 'walking') { modeColor = '#0ea5e9'; modeKey = 'walking'; glowColor = 'rgba(14,165,233,0.3)'; lineWeight = 6; dashArray = '10, 6'; modeLabel = 'Walk'; }
                 else if (mode === 'transit' || mode === 'train') { modeColor = '#e11d48'; modeKey = 'train'; glowColor = 'rgba(225,29,72,0.2)'; lineWeight = 7; dashArray = ''; modeLabel = 'Train'; }
                 else if (mode === 'bus') { modeColor = '#7c3aed'; modeKey = 'bus'; glowColor = 'rgba(124,58,237,0.2)'; lineWeight = 6; dashArray = '12, 6'; modeLabel = 'Bus'; }
                 else if (mode === 'cycling') { modeColor = '#f59e0b'; modeKey = 'cycling'; glowColor = 'rgba(245,158,11,0.2)'; lineWeight = 5; dashArray = '16, 8'; modeLabel = 'Cycle'; }
@@ -297,7 +300,8 @@ const Results = () => {
                     icon: L.divIcon({
                         className: 'route-label-node',
                         html: endHtml,
-                        iconSize: [100, 24]
+                        iconSize: [100, 24],
+                        iconAnchor: [50, 30]
                     })
                 }).addTo(map);
                 layers.push(labelMarker);
@@ -401,7 +405,7 @@ const Results = () => {
         navLayersRef.current.push(glow);
 
         const isWalking = seg.mode === 'walking';
-        const dashArr = isWalking ? { dashArray: '6, 10' } : {};
+        const dashArr = isWalking ? { dashArray: '10, 6' } : {};
         const poly = L.polyline(seg.path, {
             color, weight: 7, opacity: 0.95,
             lineCap: 'round', lineJoin: 'round', ...dashArr
@@ -420,7 +424,7 @@ const Results = () => {
         const stepNum = currentStep + 1;
         const startLabel = `<div style="background:${color};color:#fff;padding:4px 10px;border-radius:8px;font-weight:800;font-size:11px;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.3);">Step ${stepNum}</div>`;
         navLayersRef.current.push(L.marker(startPos, {
-            icon: L.divIcon({ className: 'nav-label', html: startLabel, iconSize: [60, 24] })
+            icon: L.divIcon({ className: 'nav-label', html: startLabel, iconSize: [60, 24], iconAnchor: [30, 30] })
         }).addTo(map));
 
         const endPos = seg.path[seg.path.length - 1];
@@ -428,7 +432,7 @@ const Results = () => {
             ${currentStep < routeData.segments.length - 1 ? 'Next →' : 'Destination'}
         </div>`;
         navLayersRef.current.push(L.marker(endPos, {
-            icon: L.divIcon({ className: 'nav-end-label', html: endLabelHtml, iconSize: [80, 24] })
+            icon: L.divIcon({ className: 'nav-end-label', html: endLabelHtml, iconSize: [80, 24], iconAnchor: [40, 30] })
         }).addTo(map));
 
         const bounds = L.latLngBounds(seg.path);
@@ -610,6 +614,20 @@ const Results = () => {
                                                     {transitFree && <div className="text-success">Job-Ticket active</div>}
                                                     {dauerparkFree && <div className="text-success">Dauerparkticket: Station</div>}
                                                 </div>
+                                                {(opt.nearTrain?.name || opt.nearBus?.name || opt.nearBike?.name) && (
+                                                    <div className="text-xs text-muted mt-1" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                        <span>🚶 {opt.walkTime} min</span>
+                                                        <span>→</span>
+                                                        <span style={{ fontWeight: 600 }}>
+                                                            {opt.bestTransitMode === 'train' && opt.nearTrain?.name}
+                                                            {opt.bestTransitMode === 'bus' && opt.nearBus?.name}
+                                                            {opt.bestTransitMode === 'bicycle' && opt.nearBike?.name}
+                                                        </span>
+                                                        <span className="tag" style={{ fontSize: '9px', background: 'var(--primary)', color: '#fff', borderRadius: '4px', padding: '1px 5px' }}>
+                                                            {opt.bestTransitMode === 'train' ? 'Train' : opt.bestTransitMode === 'bus' ? 'Bus' : 'Bike'}
+                                                        </span>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
                                         );

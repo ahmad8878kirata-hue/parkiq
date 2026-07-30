@@ -61,7 +61,7 @@ const Home = () => {
         if (!customLocation) return;
 
         try {
-            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(customLocation)}`);
+            const res = await fetch(`${API_BASE}/api/geocode/search?format=json&q=${encodeURIComponent(customLocation)}`);
             const data = await res.json();
             if (data && data.length > 0) {
                 const lat = parseFloat(data[0].lat);
@@ -152,7 +152,7 @@ const Home = () => {
                 }
             }
 
-            if (!startAutocompleteRef.current && searchStartLocation && searchStartLocation !== 'Stuttgart' && searchStartLocation !== 'Your Location') {
+            if (!startAutocompleteRef.current && searchStartLocation && searchStartLocation !== 'Baden-Württemberg' && searchStartLocation !== 'Your Location') {
                 if (searchStartLocation === locationStatus || searchStartLocation === 'My Location') {
                     finalStartCoords = startCoordsRef.current;
                     finalStartName = locationStatus || searchStartLocation;
@@ -228,7 +228,7 @@ const Home = () => {
                     isPickingLocationRef.current = false;
                     setLocationStatus('Loading location...');
                     try {
-                        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+                        const res = await fetch(`${API_BASE}/api/geocode/reverse?format=json&lat=${lat}&lon=${lng}`);
                         const data = await res.json();
                         if (data && data.display_name) {
                             const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];
@@ -243,7 +243,7 @@ const Home = () => {
                     setDestCoords([lat, lng]);
                     setDestStatus('Loading...');
                     try {
-                        const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`);
+                        const res = await fetch(`${API_BASE}/api/geocode/reverse?format=json&lat=${lat}&lon=${lng}`);
                         const data = await res.json();
                         if (data && data.display_name) {
                             const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];
@@ -258,7 +258,7 @@ const Home = () => {
             setMapReady(true);
         }
 
-        const stuttgartCenter = [48.7758, 9.1829];
+        const defaultCenter = [48.6616, 9.0654]; // Center of Baden-Württemberg
 
         if (locationEnabled && "geolocation" in navigator) {
             setLocationStatus('Locating...');
@@ -270,13 +270,13 @@ const Home = () => {
                     setStartCoords(ll);
                 },
                 () => {
-                    initMap(stuttgartCenter, 13);
+                    initMap(defaultCenter, 9);
                     setLocationStatus('Location access denied');
                 },
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
         } else {
-            initMap(stuttgartCenter, 13);
+            initMap(defaultCenter, 9);
         }
 
         return () => {
@@ -292,7 +292,7 @@ const Home = () => {
         const map = mapInstance.current;
 
         // Fetch parking site markers from the live API
-        fetch(`${API_BASE}/api/parking/stuttgart`)
+        fetch(`${API_BASE}/api/parking/bw`)
             .then(res => res.json())
             .then(json => {
                 if (!mapInstance.current || mapInstance.current !== map) return;
@@ -341,7 +341,7 @@ const Home = () => {
                 mapInstance.current?.flyTo(ll, 14, { animate: true });
                 setStartCoords(ll);
                 try {
-                    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${ll[0]}&lon=${ll[1]}`);
+                    const res = await fetch(`${API_BASE}/api/geocode/reverse?format=json&lat=${ll[0]}&lon=${ll[1]}`);
                     const data = await res.json();
                     if (data && data.display_name) {
                         const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];

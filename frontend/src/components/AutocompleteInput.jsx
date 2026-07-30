@@ -25,7 +25,7 @@ const AutocompleteInput = ({
         }
         try {
             const res = await fetch(
-                `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query.trim())}&addressdetails=1&limit=5&countrycodes=de`
+                `http://localhost:5000/api/geocode/search?format=json&q=${encodeURIComponent(query.trim())}&addressdetails=1&limit=5&countrycodes=de`
             );
             if (!res.ok) return;
             const data = await res.json();

@@ -95,41 +95,73 @@ function transformSite(site) {
 const geocodeCache = new Map();
 const GEOCODE_CACHE_MAX = 200;
 
+// Cache for forward geocoding search results
+const searchCache = new Map();
+const SEARCH_CACHE_MAX = 200;
+
+// Rate limiter for Nominatim API (max 1 req/sec per their policy)
+let lastNominatimRequest = 0;
+const NOMINATIM_INTERVAL = 1100;
+const pendingQueue = [];
+let processingQueue = false;
+
+async function processQueue() {
+    if (processingQueue) return;
+    processingQueue = true;
+    while (pendingQueue.length > 0) {
+        const elapsed = Date.now() - lastNominatimRequest;
+        if (elapsed < NOMINATIM_INTERVAL) {
+            await new Promise(r => setTimeout(r, NOMINATIM_INTERVAL - elapsed));
+        }
+        const { url, resolve, reject } = pendingQueue.shift();
+        lastNominatimRequest = Date.now();
+        try {
+            const response = await axios.get(url, {
+                headers: { 'User-Agent': 'ParkIQ/1.0 (contact@parkiq.example.com)' },
+                timeout: 5000
+            });
+            resolve(response);
+        } catch (err) {
+            reject(err);
+        }
+    }
+    processingQueue = false;
+}
+
+function rateLimitedNominatim(url) {
+    return new Promise((resolve, reject) => {
+        pendingQueue.push({ url, resolve, reject });
+        processQueue();
+    });
+}
+
 // Reverse geocode coordinates to get street name for generic parking entries
 async function resolveGenericParkingNames(parkings) {
     const needsResolve = parkings.filter(p => isGenericParkingName(p.rawName || p.name));
     if (needsResolve.length === 0) return;
 
-    // Process in batches of 3 to respect Nominatim rate limits
-    for (let i = 0; i < needsResolve.length; i += 3) {
-        const batch = needsResolve.slice(i, i + 3);
-        const promises = batch.map(async (parking) => {
-            const [lat, lon] = parking.coordinates;
-            const cacheKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
-            if (geocodeCache.has(cacheKey)) {
-                const cached = geocodeCache.get(cacheKey);
-                applyResolvedName(parking, cached);
-                return;
-            }
-            try {
-                const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1&zoom=18`;
-                const res = await axios.get(url, {
-                    headers: { 'User-Agent': 'ParkIQ/1.0 (contact@parkiq.example.com)' },
-                    timeout: 3000
-                });
-                const addr = res.data?.address || {};
-                const road = addr.road || addr.pedestrian || addr.path || addr.square || '';
-                const suburb = addr.suburb || addr.neighbourhood || addr.city_district || '';
-                const city = addr.city || addr.town || addr.village || '';
-                const resolved = { road, suburb, city };
-                if (geocodeCache.size < GEOCODE_CACHE_MAX) geocodeCache.set(cacheKey, resolved);
-                applyResolvedName(parking, resolved);
-            } catch {
-                // Geocoding failed, keep the name from enhanceParkingName
-            }
-        });
-        await Promise.all(promises);
-        if (i + 3 < needsResolve.length) await new Promise(r => setTimeout(r, 350));
+    for (let i = 0; i < needsResolve.length; i++) {
+        const parking = needsResolve[i];
+        const [lat, lon] = parking.coordinates;
+        const cacheKey = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+        if (geocodeCache.has(cacheKey)) {
+            const cached = geocodeCache.get(cacheKey);
+            applyResolvedName(parking, cached);
+            continue;
+        }
+        try {
+            const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1&zoom=18`;
+            const res = await rateLimitedNominatim(url);
+            const addr = res.data?.address || {};
+            const road = addr.road || addr.pedestrian || addr.path || addr.square || '';
+            const suburb = addr.suburb || addr.neighbourhood || addr.city_district || '';
+            const city = addr.city || addr.town || addr.village || '';
+            const resolved = { road, suburb, city };
+            if (geocodeCache.size < GEOCODE_CACHE_MAX) geocodeCache.set(cacheKey, resolved);
+            applyResolvedName(parking, resolved);
+        } catch {
+            // Geocoding failed, keep the name from enhanceParkingName
+        }
     }
 }
 
@@ -181,24 +213,89 @@ if (!parkingCache.data) {
     parkingCache.data = [];
     parkingCache.lastUpdated = Date.now();
 }
-// Attempt initial API fetch in background so cache is warm for first visitor
-setTimeout(() => fetchAndCacheParking().catch(() => {}), 1000);
+// Attempt initial API fetch immediately (after setup) so cache is warm for first visitor
+setTimeout(() => fetchAndCacheParking().catch(() => {}), 0);
+setTimeout(() => fetchAndCacheParking().catch(() => {}), 30000);
 
 const STUTTGART_CENTER = { lat: 48.7758, lon: 9.1829 };
 const RADIUS_METERS = 5000;
-const PAGINATION_LIMIT = 100;
+const PAGINATION_LIMIT = 200;
+
+const BW_CITIES = [
+    { name: 'Stuttgart', lat: 48.7758, lon: 9.1829, radius: 40000 },
+    { name: 'Karlsruhe', lat: 49.0069, lon: 8.4037, radius: 30000 },
+    { name: 'Mannheim', lat: 49.4875, lon: 8.4660, radius: 30000 },
+    { name: 'Freiburg', lat: 47.9990, lon: 7.8421, radius: 30000 },
+    { name: 'Heidelberg', lat: 49.3988, lon: 8.6724, radius: 20000 },
+    { name: 'Ulm', lat: 48.4011, lon: 9.9876, radius: 20000 },
+    { name: 'Heilbronn', lat: 49.1427, lon: 9.2109, radius: 20000 },
+    { name: 'Pforzheim', lat: 48.8910, lon: 8.6946, radius: 15000 }
+];
 
 async function fetchAndCacheParking() {
+    let allSites = [];
+    const seenIds = new Set();
+
+    try {
+        for (const city of BW_CITIES) {
+            try {
+                const url = `${MOBIDATA_PARK_API}?lat=${city.lat}&lon=${city.lon}&radius=${city.radius}&limit=${PAGINATION_LIMIT}`;
+                const response = await axios.get(url, {
+                    headers: { 'Accept': 'application/json' },
+                    timeout: 15000
+                });
+                const items = response.data?.items || [];
+                const filtered = items.filter(s => s.purpose === 'CAR').map(transformSite);
+                
+                for (const s of filtered) {
+                    if (!seenIds.has(s.id)) {
+                        seenIds.add(s.id);
+                        allSites.push(s);
+                    }
+                }
+            } catch (e) {
+                console.error(`Error fetching for ${city.name}:`, e.message);
+            }
+        }
+
+        if (allSites.length > 0) {
+            console.log(`Fetched ${allSites.length} parking sites across Baden-Württemberg`);
+            
+            parkingCache.data = allSites;
+            parkingCache.lastUpdated = Date.now();
+            saveDiskCache();
+            
+            // Resolve generic names in the background to not block the request
+            resolveGenericParkingNames(allSites).then(() => {
+                parkingCache.lastUpdated = Date.now();
+                saveDiskCache();
+            }).catch(e => console.error("Error resolving names in bg:", e.message));
+            
+        } else {
+            console.log('Empty statewide response, falling back to Stuttgart-area fetch');
+            return await fetchAndCacheParkingStuttgart();
+        }
+        return parkingCache.data;
+    } catch (err) {
+        console.error('MobiData BW API Error:', err.message);
+        if (!parkingCache.data?.length) {
+            return await fetchAndCacheParkingStuttgart();
+        }
+        return parkingCache.data || [];
+    }
+}
+
+async function fetchAndCacheParkingStuttgart() {
     const allSites = [];
     let start = 0;
     let hasMore = true;
 
     try {
         while (hasMore) {
-            const url = `${MOBIDATA_PARK_API}?lat=${STUTTGART_CENTER.lat}&lon=${STUTTGART_CENTER.lon}&radius=${RADIUS_METERS}&limit=${PAGINATION_LIMIT}&start=${start}`;
+            const url = `${MOBIDATA_PARK_API}?lat=${STUTTGART_CENTER.lat}&lon=${STUTTGART_CENTER.lon}&radius=50000&limit=${PAGINATION_LIMIT}&start=${start}`;
             const response = await axios.get(url, {
                 headers: { 'Accept': 'application/json' },
-                timeout: 15000
+                timeout: 8000
             });
             const items = response.data?.items || [];
             if (items.length === 0) break;
@@ -221,16 +318,16 @@ async function fetchAndCacheParking() {
             parkingCache.data = allSites;
             parkingCache.lastUpdated = Date.now();
             saveDiskCache();
-            console.log(`Fetched ${allSites.length} parking sites from API`);
+            console.log(`Fetched ${allSites.length} parking sites from Stuttgart-area fallback`);
         }
         return parkingCache.data;
     } catch (err) {
-        console.error('MobiData BW API Error:', err.message);
+        console.error('MobiData BW API Error (Stuttgart fallback):', err.message);
         return parkingCache.data || [];
     }
 }
 
-async function fetchParkingNear(lat, lon, radius = 5000) {
+async function fetchParkingNear(lat, lon, radius = 10000, { skipNameResolve = false } = {}) {
     const allSites = [];
     let start = 0;
     let hasMore = true;
@@ -240,7 +337,7 @@ async function fetchParkingNear(lat, lon, radius = 5000) {
             const url = `${MOBIDATA_PARK_API}?lat=${lat}&lon=${lon}&radius=${radius}&limit=${PAGINATION_LIMIT}&start=${start}`;
             const response = await axios.get(url, {
                 headers: { 'Accept': 'application/json' },
-                timeout: 15000
+                timeout: 8000
             });
             const items = response.data?.items || [];
             if (items.length === 0) break;
@@ -257,15 +354,19 @@ async function fetchParkingNear(lat, lon, radius = 5000) {
                 start = response.data.next_id || start + PAGINATION_LIMIT;
             }
         }
-        await resolveGenericParkingNames(allSites);
+        // Skip slow Nominatim geocoding during route requests (1 req/sec rate limit)
+        if (!skipNameResolve) {
+            await resolveGenericParkingNames(allSites);
+        }
         return allSites;
     } catch (err) {
         console.error('MobiData BW API Error (fetchParkingNear):', err.message);
-        return [];
+        // Fall back to cached data when the API is unavailable
+        return parkingCache.data || [];
     }
 }
 
-app.get('/api/parking/stuttgart', async (req, res) => {
+app.get('/api/parking/bw', async (req, res) => {
     const now = Date.now();
     if (parkingCache.data && parkingCache.data.length > 0 && (now - parkingCache.lastUpdated < CACHE_DURATION)) {
         return res.json({ source: 'cache', sites: parkingCache.data });
@@ -494,17 +595,15 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
 // ====== Transit Stops Fetcher ======
 const FALLBACK_STOPS = require('./transit_stops_fallback');
 
+// In-memory cache for Overpass transit stop queries
+const transitStopsCache = new Map();
+const TRANSIT_STOPS_CACHE_MAX = 30;
+const TRANSIT_STOPS_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
 async function fetchTransitStopsBBox(destCoords, parkings = [], startCoords = null) {
-    // Compute a single combined bounding box that covers origin, destination, and parkings
+    // Build bbox around destination + nearby parkings (NOT startCoords)
     let minLat = destCoords[0], maxLat = destCoords[0];
     let minLon = destCoords[1], maxLon = destCoords[1];
-
-    if (startCoords) {
-        minLat = Math.min(minLat, startCoords[0]);
-        maxLat = Math.max(maxLat, startCoords[0]);
-        minLon = Math.min(minLon, startCoords[1]);
-        maxLon = Math.max(maxLon, startCoords[1]);
-    }
 
     for (const p of parkings) {
         minLat = Math.min(minLat, p.coordinates[0]);
@@ -513,9 +612,26 @@ async function fetchTransitStopsBBox(destCoords, parkings = [], startCoords = nu
         maxLon = Math.max(maxLon, p.coordinates[1]);
     }
 
+    // Clamp the bbox to a maximum of ~0.18 degrees (~20km) from the destination
+    // to avoid pulling in transit stops from irrelevant areas when a parking is far.
+    // The destination is the primary anchor — parkings beyond this radius won't
+    // extend the search area (they are too far to be walkable to a stop anyway).
+    const MAX_BBOX_RADIUS = 0.18;
+    minLat = Math.max(minLat, destCoords[0] - MAX_BBOX_RADIUS);
+    maxLat = Math.min(maxLat, destCoords[0] + MAX_BBOX_RADIUS);
+    minLon = Math.max(minLon, destCoords[1] - MAX_BBOX_RADIUS);
+    maxLon = Math.min(maxLon, destCoords[1] + MAX_BBOX_RADIUS);
+
     // Add padding (~4km)
     minLat -= 0.035; maxLat += 0.035;
     minLon -= 0.045; maxLon += 0.045;
+
+    // Round bbox to 2 decimals for cache key stability
+    const cacheKey = `${minLat.toFixed(2)},${minLon.toFixed(2)},${maxLat.toFixed(2)},${maxLon.toFixed(2)}`;
+    const cached = transitStopsCache.get(cacheKey);
+    if (cached && (Date.now() - cached.ts < TRANSIT_STOPS_CACHE_TTL)) {
+        return cached.stops;
+    }
 
     const query = `[out:json][timeout:15];
 (
@@ -547,7 +663,6 @@ out body;`;
                     const highway = e.tags?.highway || '';
                     const railway = e.tags?.railway || '';
                     const amenity = e.tags?.amenity || '';
-                    // Use the raw tag value as type (e.g., 'station', 'halt', 'tram_stop', 'bus_stop')
                     const type = railway || highway || amenity || 'transit';
                     return {
                         name: e.tags?.name || 'Transit Stop',
@@ -555,7 +670,16 @@ out body;`;
                         type: type.toLowerCase()
                     };
                 });
-                return [...stops, ...FALLBACK_STOPS];
+                // Only append fallback stops if we got actual results from Overpass
+                // (fallback stops are Stuttgart-area only and should not pollute other regions)
+                const result = stops.length > 0 ? stops : FALLBACK_STOPS;
+                // Cache the result
+                if (transitStopsCache.size >= TRANSIT_STOPS_CACHE_MAX) {
+                    const firstKey = transitStopsCache.keys().next().value;
+                    if (firstKey) transitStopsCache.delete(firstKey);
+                }
+                transitStopsCache.set(cacheKey, { stops: result, ts: Date.now() });
+                return result;
             }
         } catch (err) {
             if (err.response?.status === 429) {
@@ -583,14 +707,16 @@ function findNearestTransitStop(coords, stops, modeKeywords) {
     return best ? { name: best.name, coordinates: best.coordinates, distance: Math.round(bestDist) } : null;
 }
 
-// Find top N nearest transit stops by Haversine distance
-function findTopTransitStops(coords, stops, modeKeywords, count = 3) {
+// Find top N nearest transit stops by Haversine distance within a walkable radius
+function findTopTransitStops(coords, stops, modeKeywords, count = 3, maxDistance = MAX_WALK_PER_SEGMENT * 3) {
     const scored = [];
     for (const stop of stops) {
         const t = stop.type || '';
         const matches = modeKeywords.some(kw => t.includes(kw));
         if (!matches) continue;
-        scored.push({ stop, dist: distanceMeters(coords, stop.coordinates) });
+        const dist = distanceMeters(coords, stop.coordinates);
+        if (dist > maxDistance) continue;
+        scored.push({ stop, dist });
     }
     scored.sort((a, b) => a.dist - b.dist);
     return scored.slice(0, count).map(s => ({
@@ -603,7 +729,7 @@ function findTopTransitStops(coords, stops, modeKeywords, count = 3) {
 // Find the transit stop with the shortest actual walking path (via OSRM).
 // Considers top N candidates by Haversine, fetches OSRM walking routes for each,
 // and picks the one with the shortest actual walking distance.
-// Returns null if no candidate is within maxWalkMeters.
+// Returns null if no candidate is within maxWalkMeters (no unlimited fallback).
 async function findNearestTransitStopByWalking(coords, stops, modeKeywords, maxWalkMeters = MAX_WALK_PER_SEGMENT) {
     const candidates = [];
     for (const stop of stops) {
@@ -616,6 +742,8 @@ async function findNearestTransitStopByWalking(coords, stops, modeKeywords, maxW
     // Sort by Haversine distance and take top 5
     candidates.sort((a, b) => a.d - b.d);
     const topCandidates = candidates.slice(0, 5);
+    
+    if (topCandidates.length === 0) return null;
     
     let best = null;
     let bestWalkDist = Infinity;
@@ -633,17 +761,6 @@ async function findNearestTransitStopByWalking(coords, stops, modeKeywords, maxW
         if (walkDist < bestWalkDist && walkDist <= maxWalkMeters) {
             bestWalkDist = walkDist;
             best = cand.stop;
-        }
-    }
-    
-    if (!best && topCandidates.length > 0) {
-        // If nothing within limit, take the best we found regardless
-        for (let i = 0; i < topCandidates.length; i++) {
-            const walkDist = osrmResults[i]?.pathLength || topCandidates[i].d;
-            if (walkDist < bestWalkDist) {
-                bestWalkDist = walkDist;
-                best = topCandidates[i].stop;
-            }
         }
     }
     
@@ -731,7 +848,8 @@ async function doHafasJourney(client, fromId, toId, mode) {
             arrival: leg.arrival
         });
     }
-    const path = fullPath.length > 1 ? simplifyPath(fullPath) : interpolatePoints([0,0], [0,0], 2);
+    if (fullPath.length <= 1) return null;
+    const path = simplifyPath(fullPath);
     return {
         path,
         durationMin: Math.max(1, Math.round(totalDuration)),
@@ -774,7 +892,7 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
 
     const drivingResult = await fetchOSRMRoute(center, parkCoords, 'driving');
     const drivingPath = drivingResult?.path || interpolatePoints(center, parkCoords);
-    const driveMinutes = drivingResult?.durationMin || Math.max(1, Math.round(distanceMeters(center, parkCoords) / 200));
+    const driveMinutes = Math.min(240, drivingResult?.durationMin || Math.max(1, Math.round(distanceMeters(center, parkCoords) / 1000)));
 
     const segments = [
         { mode: 'driving', path: drivingPath, label: 'Drive', durationMin: driveMinutes }
@@ -796,10 +914,84 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
 
     // Find nearest stations using Overpass (HAFAS unavailable in this environment)
     const allStops = await fetchTransitStopsBBox(destCoords, [{coordinates: parkCoords}], center);
+
+    // Tiered walk limits:
+    //   Parking-side stop → CLOSE    (≤800m walk)
+    //   Destination-side stop → VERY CLOSE (≤400m walk)
+    //   Fall back to MAX_WALK_PER_SEGMENT if nothing found within the tighter limit.
+    const PARK_WALK_MAX = 800;
+    const DEST_WALK_TIGHT = 400;
+
     let [nearStop, nearDestStop] = await Promise.all([
-        findNearestTransitStopByWalking(parkCoords, allStops, modeKeywords),
-        findNearestTransitStopByWalking(destCoords, allStops, modeKeywords)
+        findNearestTransitStopByWalking(parkCoords, allStops, modeKeywords, PARK_WALK_MAX)
+            .then(r => r ?? findNearestTransitStopByWalking(parkCoords, allStops, modeKeywords, MAX_WALK_PER_SEGMENT)),
+        findNearestTransitStopByWalking(destCoords, allStops, modeKeywords, DEST_WALK_TIGHT)
+            .then(r => r ?? findNearestTransitStopByWalking(destCoords, allStops, modeKeywords, PARK_WALK_MAX))
+            .then(r => r ?? findNearestTransitStopByWalking(destCoords, allStops, modeKeywords, MAX_WALK_PER_SEGMENT))
     ]);
+
+    // Ensure the transit stop near parking is in the direction of the destination.
+    // If the nearest stop is farther from the destination than the parking itself,
+    // it lies behind the parking — that would force a backward walk, then transit
+    // forward again. Find a better stop that makes progress toward the destination.
+    if (nearStop) {
+        const parkToDestDist = distanceMeters(parkCoords, destCoords);
+        const stopToDestDist = distanceMeters(nearStop.coordinates, destCoords);
+        if (stopToDestDist >= parkToDestDist) {
+            const stopsTowardDest = allStops
+                .filter(s => modeKeywords.some(kw => (s.type || '').includes(kw)))
+                .filter(s => distanceMeters(s.coordinates, destCoords) < parkToDestDist)
+                .sort((a, b) => distanceMeters(a.coordinates, parkCoords) - distanceMeters(b.coordinates, parkCoords));
+            if (stopsTowardDest.length > 0) {
+                const osrmResults = await Promise.all(
+                    stopsTowardDest.slice(0, 5).map(s => fetchOSRMRoute(parkCoords, s.coordinates, 'walking'))
+                );
+                let bestWalkDist = Infinity;
+                for (let i = 0; i < Math.min(5, stopsTowardDest.length); i++) {
+                    const walkDist = osrmResults[i]?.pathLength || distanceMeters(parkCoords, stopsTowardDest[i].coordinates);
+                    if (walkDist < bestWalkDist && walkDist <= PARK_WALK_MAX) {
+                        bestWalkDist = walkDist;
+                        nearStop = {
+                            name: stopsTowardDest[i].name,
+                            coordinates: stopsTowardDest[i].coordinates,
+                            distance: Math.round(walkDist)
+                        };
+                    }
+                }
+                // If no walkable stop toward destination, keep the original (will use fallback)
+            }
+        }
+    }
+
+    // If the nearest stop to parking is the same as the nearest stop to destination
+    // (within 200m), the transit segment would be zero-length and invisible.
+    // Try to find a different stop near the destination so the transit route is meaningful.
+    if (nearStop && nearDestStop) {
+        const stopDist = distanceMeters(nearStop.coordinates, nearDestStop.coordinates);
+        if (stopDist < 200) {
+            const otherDestStops = allStops
+                .filter(s => modeKeywords.some(kw => (s.type || '').includes(kw)))
+                .filter(s => distanceMeters(s.coordinates, nearStop.coordinates) >= 200)
+                .sort((a, b) => distanceMeters(a.coordinates, destCoords) - distanceMeters(b.coordinates, destCoords));
+            if (otherDestStops.length > 0) {
+                const osrmResults = await Promise.all(
+                    otherDestStops.slice(0, 3).map(s => fetchOSRMRoute(destCoords, s.coordinates, 'walking'))
+                );
+                let bestWalkDist = Infinity;
+                for (let i = 0; i < Math.min(3, otherDestStops.length); i++) {
+                    const walkDist = osrmResults[i]?.pathLength || distanceMeters(destCoords, otherDestStops[i].coordinates);
+                    if (walkDist < bestWalkDist && walkDist <= DEST_WALK_TIGHT) {
+                        bestWalkDist = walkDist;
+                        nearDestStop = {
+                            name: otherDestStops[i].name,
+                            coordinates: otherDestStops[i].coordinates,
+                            distance: Math.round(walkDist)
+                        };
+                    }
+                }
+            }
+        }
+    }
 
     const transitFrom = nearStop?.coordinates || parkCoords;
     const transitTo = nearDestStop?.coordinates || destCoords;
@@ -807,10 +999,8 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
     const destStopName = nearDestStop?.name || 'Destination stop';
 
     // Segments 2 and 4: walking
-    const [wResult, wdResult] = await Promise.all([
-        fetchOSRMRoute(parkCoords, transitFrom, 'walking'),
-        fetchOSRMRoute(transitTo, destCoords, 'walking')
-    ]);
+    const wResult = await fetchOSRMRoute(parkCoords, transitFrom, 'walking');
+    const wdResult = await fetchOSRMRoute(transitTo, destCoords, 'walking');
 
     // Segment 2: Walk from parking to transit stop
     const walkPath = wResult?.path || interpolatePoints(parkCoords, transitFrom, 4);
@@ -869,9 +1059,14 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
             const avgSpeedKmh = modeLabel === 'bus' ? 30 : 60;
             const estimatedMin = Math.max(3, Math.round(transitDistKm / avgSpeedKmh * 60));
             const cappedMin = Math.min(estimatedMin, 90);
+            
+            // Fallback to OSRM driving path to snap to roads instead of straight lines
+            const fallbackRoute = await fetchOSRMRoute(transitFrom, transitTo, 'driving');
+            const fallbackPath = fallbackRoute?.path || interpolatePoints(transitFrom, transitTo, 8);
+
             segments.push({
                 mode: modeLabel === 'bus' ? 'bus' : 'train',
-                path: interpolatePoints(transitFrom, transitTo, 8),
+                path: fallbackPath,
                 label: modeLabel === 'bus' ? 'Bus' : 'Train',
                 durationMin: cappedMin,
                 fromStop: stopName,
@@ -884,9 +1079,14 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
         const avgSpeedKmh = modeLabel === 'bus' ? 30 : 60;
         const estimatedMin = Math.max(3, Math.round(transitDistKm / avgSpeedKmh * 60));
         const cappedMin = Math.min(estimatedMin, 90);
+        
+        // Fallback to OSRM driving path to snap to roads instead of straight lines
+        const fallbackRoute = await fetchOSRMRoute(transitFrom, transitTo, 'driving');
+        const fallbackPath = fallbackRoute?.path || interpolatePoints(transitFrom, transitTo, 8);
+
         segments.push({
             mode: modeLabel === 'bus' ? 'bus' : 'train',
-            path: interpolatePoints(transitFrom, transitTo, 8),
+            path: fallbackPath,
             label: modeLabel === 'bus' ? 'Bus' : 'Train',
             durationMin: cappedMin,
             fromStop: stopName,
@@ -915,7 +1115,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.post('/api/routes', async (req, res) => {
-    const ROUTE_TIMEOUT_MS = 25000;
+    const ROUTE_TIMEOUT_MS = 60000;
     let timedOut = false;
     const routeTimer = setTimeout(() => {
         timedOut = true;
@@ -954,24 +1154,19 @@ app.post('/api/routes', async (req, res) => {
                 : estimateDestCoords(destName);
         }
 
-        // Search for parking near both origin and destination (in parallel)
-        const nearDest = distanceMeters(destCoords, [STUTTGART_CENTER.lat, STUTTGART_CENTER.lon]) < 10000;
+        // Use the comprehensive Baden-Württemberg cache for destination-side parking,
+        // and fetch live parking near the user's destination location.
+        // skipNameResolve=true avoids the slow Nominatim rate-limited geocoding
         let [originParkings, destParkings] = await Promise.all([
-            startCoords ? fetchParkingNear(startCoords[0], startCoords[1], 5000) : Promise.resolve([]),
-            nearDest ? getParkingSites() : fetchParkingNear(destCoords[0], destCoords[1], 5000)
+            destCoords ? fetchParkingNear(destCoords[0], destCoords[1], 10000, { skipNameResolve: true }) : Promise.resolve([]),
+            getParkingSites()
         ]);
-        if (!originParkings.length && startCoords) {
-            originParkings = await fetchParkingNear(startCoords[0], startCoords[1], 10000);
-        }
-        if (!destParkings.length) {
-            if (!nearDest) {
-                destParkings = await fetchParkingNear(destCoords[0], destCoords[1], 10000);
-            } else {
-                loadDiskCache();
-                if (parkingCache.data?.length) {
-                    destParkings = parkingCache.data;
-                }
-            }
+
+        if (timedOut) { clearRouteTimer(); return; }
+
+        // If live fetch returned empty and the API is down, use cache data
+        if (!originParkings.length && destCoords) {
+            originParkings = destParkings;
         }
         // Merge both sets, deduplicate by id
         const seenIds = new Set();
@@ -988,7 +1183,9 @@ app.post('/api/routes', async (req, res) => {
             if (parkingCache.data?.length) {
                 liveParkings = parkingCache.data;
             } else {
-                clearRouteTimer(); return res.status(503).json({ success: false, message: 'No live parking data available near destination' });
+                clearRouteTimer(); 
+                if (!res.headersSent) return res.status(503).json({ success: false, message: 'No live parking data available near destination' });
+                return;
             }
         }
 
@@ -1000,10 +1197,20 @@ app.post('/api/routes', async (req, res) => {
                 if (cachedPark) {
                     liveParkings = [cachedPark];
                 } else {
-                    clearRouteTimer(); return res.status(404).json({ success: false, message: 'Selected parking not found' });
+                    clearRouteTimer(); 
+                    if (!res.headersSent) return res.status(404).json({ success: false, message: 'Selected parking not found' });
+                    return;
                 }
             }
+        } else {
+            // Pre-filter to the 15 closest parking sites to the destination
+            // This dramatically reduces processing time for the listing path
+            liveParkings.sort((a, b) => distanceMeters(destCoords, a.coordinates) - distanceMeters(destCoords, b.coordinates));
+            liveParkings = liveParkings.slice(0, 15);
         }
+
+        if (timedOut) { clearRouteTimer(); return; }
+
         const now = new Date();
         const date = arrivalTime ? new Date(arrivalTime) : now;
         const timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
@@ -1021,7 +1228,7 @@ app.post('/api/routes', async (req, res) => {
             const walkMin1 = segments[1]?.durationMin || 3;
             const transitMin = segments[2]?.durationMin || 20;
             const walkMin2 = segments[3]?.durationMin || 3;
-            const totalTimeMinutes = driveMinutes + walkMin1 + transitMin + walkMin2;
+            const totalTimeMinutes = Math.min(480, driveMinutes + walkMin1 + transitMin + walkMin2);
 
             let lineName = 'S-Bahn';
             let modeLabel = 'transit';
@@ -1045,47 +1252,57 @@ app.post('/api/routes', async (req, res) => {
             const timeline = [
                 { time: timeFormatter.format(depTime), mode: 'driving', name: 'Current Location', details: 'Drive to parking', durationMin: driveMinutes },
                 { time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, details: 'Park car', durationMin: 0 },
-                { time: timeFormatter.format(transitDep), mode: 'walking', name: stopName, details: `Walk to ${stopName} (${walkMin1} min)`, durationMin: walkMin1 },
-                { time: timeFormatter.format(transitArr), mode: modeLabel, name: destStopName, details: `${lineName} → ${destName}`, durationMin: transitMin },
+                { time: timeFormatter.format(transitDep), mode: 'walking', name: stopName, details: `Walk ${walkMin1} min to ${stopName}`, durationMin: walkMin1 },
+                { time: timeFormatter.format(transitArr), mode: modeLabel, name: stopName, details: `Board ${lineName} → ${destStopName} (${transitMin} min)`, durationMin: transitMin },
                 { time: timeFormatter.format(destArrive), mode: 'walking', name: destName, details: `Walk to destination (${walkMin2} min)`, durationMin: walkMin2 },
                 { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, details: 'Arrive at destination', durationMin: 0 },
             ];
 
             const pricing = getParkingPricing(park);
 
-            clearRouteTimer(); return res.json({
-                success: true,
-                data: [{
-                    id: park.id, parkingName: park.name,
-                    parkingPrice: parkingPriceNum.toFixed(2),
-                    ticketPrice: '0.00',
-                    totalCost: totalCost.toFixed(2),
-                    savings: savings.toFixed(2),
-                    totalTime: `${totalTimeMinutes} min`,
-                    travelDuration: `${transitMin} min`,
-                    walkTime: walkMin1 + walkMin2,
-                    walkDistance: `${walkMin1 + walkMin2} min`,
-                    transitRoute: lineName,
-                    segments,
-                    timeline,
-                    transitType: modeLabel,
-                    lat: park.coordinates[0],
-                    lng: park.coordinates[1],
-                    totalCapacity: park.totalCapacity,
-                    amenities: park.amenities,
-                    hasFee: park.hasFee,
-                    feeDescription: park.feeDescription,
-                    description: park.description,
-                    isFree: pricing.isFree,
-                    displayPrice: pricing.displayPrice,
-                    hourlyRate: pricing.isFree ? 'Free' : pricing.displayPrice
-                }]
-            });
+            clearRouteTimer(); 
+            if (!res.headersSent) {
+                return res.json({
+                    success: true,
+                    data: [{
+                        id: park.id, parkingName: park.name,
+                        parkingPrice: parkingPriceNum.toFixed(2),
+                        ticketPrice: '0.00',
+                        totalCost: totalCost.toFixed(2),
+                        savings: savings.toFixed(2),
+                        totalTime: `${totalTimeMinutes} min`,
+                        travelDuration: `${transitMin} min`,
+                        walkTime: walkMin1 + walkMin2,
+                        walkDistance: `${walkMin1 + walkMin2} min`,
+                        transitRoute: lineName,
+                        segments,
+                        timeline,
+                        transitType: modeLabel,
+                        lat: park.coordinates[0],
+                        lng: park.coordinates[1],
+                        totalCapacity: park.totalCapacity,
+                        amenities: park.amenities,
+                        hasFee: park.hasFee,
+                        feeDescription: park.feeDescription,
+                        description: park.description,
+                        isFree: pricing.isFree,
+                        displayPrice: pricing.displayPrice,
+                        hourlyRate: pricing.isFree ? 'Free' : pricing.displayPrice
+                    }]
+                });
+            } else {
+                return;
+            }
         }
 
         // ===== Default: list parking options with basic info =====
+        if (timedOut) { clearRouteTimer(); return; }
+
         const allOptions = [];
-        const allStops = await fetchTransitStopsBBox(destCoords, liveParkings, startCoords);
+        // Only pass destination-area parkings (no startCoords) to keep Overpass bbox small
+        const allStops = await fetchTransitStopsBBox(destCoords, liveParkings);
+
+        if (timedOut) { clearRouteTimer(); return; }
 
         // Find top destination-area stops per mode
         const destTopTrain = findTopTransitStops(destCoords, allStops, ['station', 'halt', 'train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'], 3);
@@ -1102,6 +1319,8 @@ app.post('/api/routes', async (req, res) => {
                     if (total < best) best = total;
                 }
             }
+            // If the best walk is unreasonably far, treat as unavailable
+            if (best > MAX_WALK_PER_SEGMENT * 3) return 9999;
             return best;
         }
 
@@ -1110,7 +1329,7 @@ app.post('/api/routes', async (req, res) => {
             const totalCost = parseFloat(parkingPrice.toFixed(2));
             const savings = Math.max(0, DIRECT_CITY_PARKING_COST - totalCost);
             const pricing = getParkingPricing(park);
-            const driveMinutes = Math.max(1, Math.round(distanceMeters(startCoords || [48.7758, 9.1829], park.coordinates) / 200));
+            const driveMinutes = Math.min(240, Math.max(1, Math.round(distanceMeters(startCoords || [48.7758, 9.1829], park.coordinates) / 1000)));
 
             // Find top N stops of each type near the parking
             const nearTrain = findTopTransitStops(park.coordinates, allStops, ['station', 'halt', 'train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'], 3);
@@ -1138,7 +1357,7 @@ app.post('/api/routes', async (req, res) => {
             const oneWayWalkMeters = Math.round(minWalkToTransit === Infinity ? 200 : minWalkToTransit);
             const totalWalkMeters = Math.round(bestTotalWalk === 9999 ? 500 : bestTotalWalk);
             const walkTimeMin = Math.max(1, Math.round(oneWayWalkMeters / 80));
-            const totalWalkTimeMin = Math.max(1, Math.round(totalWalkMeters / 80));
+            const totalWalkTimeMin = Math.min(30, Math.max(1, Math.round(totalWalkMeters / 80)));
 
             // Calculate actual transit time based on best mode's stop-to-stop distance
             let transitTimeEst = 20;
@@ -1150,7 +1369,9 @@ app.post('/api/routes', async (req, res) => {
                 transitTimeEst = Math.max(2, Math.round(distKm / 60 * 60));
             }
 
+            const distToDest = distanceMeters(destCoords, park.coordinates);
             allOptions.push({
+                distanceToDest: distToDest,
                 id: park.id, parkingName: park.name,
                 parkingPrice: parkingPrice.toFixed(2),
                 totalCost: totalCost.toFixed(2),
@@ -1181,14 +1402,18 @@ app.post('/api/routes', async (req, res) => {
             });
         }
 
-        // Sort by total walking estimate (primary), then cost (secondary)
-        allOptions.sort((a, b) => a.totalWalkEstimate - b.totalWalkEstimate || parseFloat(a.totalCost) - parseFloat(b.totalCost));
-        res.json({ success: true, data: allOptions });
+        // Sort by distance to destination (primary), then cost (secondary)
+        allOptions.sort((a, b) => a.distanceToDest - b.distanceToDest || parseFloat(a.totalCost) - parseFloat(b.totalCost));
+        if (!res.headersSent) {
+            res.json({ success: true, data: allOptions });
+        }
 
     } catch (error) {
         clearRouteTimer();
         console.error("Error fetching route:", error);
-        res.status(500).json({ success: false, error: 'Failed to calculate route' });
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, error: 'Failed to calculate route' });
+        }
     } finally {
         clearRouteTimer();
     }
@@ -1245,6 +1470,44 @@ app.get('/api/transit-stops', async (req, res) => {
             properties: { name: s.name, type: s.type }
         }));
         res.json({ type: "FeatureCollection", features });
+    }
+});
+
+// ====== Geocoding Proxy (Nominatim) ======
+
+app.get('/api/geocode/search', async (req, res) => {
+    try {
+        const { q, limit, countrycodes, addressdetails } = req.query;
+        if (!q) return res.status(400).json({ error: 'Missing query parameter q' });
+        const cacheKey = `${q.trim().toLowerCase()}|${limit || 5}|${countrycodes || ''}`;
+        if (searchCache.has(cacheKey)) {
+            return res.json(searchCache.get(cacheKey));
+        }
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=${limit || 5}&addressdetails=${addressdetails || 1}${countrycodes ? `&countrycodes=${countrycodes}` : ''}`;
+        const response = await rateLimitedNominatim(url);
+        if (searchCache.size < SEARCH_CACHE_MAX) searchCache.set(cacheKey, response.data);
+        res.json(response.data);
+    } catch (err) {
+        console.error('Geocode search error:', err.message);
+        res.status(502).json({ error: 'Geocoding service unavailable' });
+    }
+});
+
+app.get('/api/geocode/reverse', async (req, res) => {
+    try {
+        const { lat, lon, format, addressdetails, zoom } = req.query;
+        if (!lat || !lon) return res.status(400).json({ error: 'Missing lat/lon parameters' });
+        const cacheKey = `${parseFloat(lat).toFixed(4)},${parseFloat(lon).toFixed(4)}`;
+        if (geocodeCache.has(cacheKey)) {
+            return res.json(geocodeCache.get(cacheKey));
+        }
+        const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=${format || 'json'}&addressdetails=${addressdetails || 1}&zoom=${zoom || 18}`;
+        const response = await rateLimitedNominatim(url);
+        if (geocodeCache.size < GEOCODE_CACHE_MAX) geocodeCache.set(cacheKey, response.data);
+        res.json(response.data);
+    } catch (err) {
+        console.error('Geocode reverse error:', err.message);
+        res.status(502).json({ error: 'Reverse geocoding service unavailable' });
     }
 });
 
