@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useParking } from '../context/ParkingContext';
-import { List, Car, CaretRight, House, Briefcase, Barbell, FirstAid, MagnifyingGlass, Microphone, X, MapPin, NavigationArrow, ChargingStation, DotsThreeVertical, Pencil, CalendarBlank, CaretLeft } from '@phosphor-icons/react';
+import { List, Car, CaretRight, House, Briefcase, Barbell, FirstAid, MagnifyingGlass, Microphone, X, MapPin, NavigationArrow, ChargingStation, DotsThreeVertical, Pencil, CalendarBlank, CaretLeft, Ticket, WarningCircle } from '@phosphor-icons/react';
 import L from 'leaflet';
 import './Home.css';
 import './Search.css';
+import './Selection.css';
 import '../components/AutocompleteInput.css';
 import AutocompleteInput from '../components/AutocompleteInput';
 
@@ -12,7 +13,7 @@ const API_BASE = 'http://localhost:5000';
 
 const Home = () => {
     const navigate = useNavigate();
-    const { parkingType, locationEnabled } = useParking();
+    const { parkingType, locationEnabled, hasJobTicket, setHasJobTicket, hasDauerparkticket, setHasDauerparkticket, dauerparkticketStation, setDauerparkticketStation, setDauerparkticketStationCoords } = useParking();
     const mapRef = useRef(null);
     const mapInstance = useRef(null);
     const markerInstance = useRef(null);
@@ -49,6 +50,23 @@ const Home = () => {
     const [searchShowDate, setSearchShowDate] = useState(false);
     const [isDeparture, setIsDeparture] = useState(true);
     const [loadingLocation, setLoadingLocation] = useState(false);
+    const [stationInput, setStationInput] = useState('');
+
+    const handleDauerparkticketConfirm = async () => {
+        if (stationInput.trim()) {
+            setDauerparkticketStation(stationInput.trim());
+            try {
+                const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(stationInput.trim())}&limit=1`);
+                const data = await res.json();
+                if (data.features && data.features.length > 0) {
+                    const coords = [data.features[0].geometry.coordinates[1], data.features[0].geometry.coordinates[0]];
+                    setDauerparkticketStationCoords(coords);
+                }
+            } catch (e) {
+                console.error('Failed to geocode station:', e);
+            }
+        }
+    };
 
     const handleSelectParking = (lot) => {
         setSelectedParking(lot);
@@ -535,7 +553,7 @@ const Home = () => {
                                 className="search-input"
                             />
                             <AutocompleteInput
-                                placeholder="Where are you going? (e.g. Schlossplatz, Stuttgart)"
+                                placeholder="Where are you going? (PLZ eingeben)"
                                 value={searchDestination}
                                 onChange={(e) => setSearchDestination(e.target.value)}
                                 onSelect={(data) => {
@@ -660,6 +678,83 @@ const Home = () => {
                                 <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Help us improve the ParkIQ experience</span>
                             </div>
                             <input type="checkbox" defaultChecked style={{ transform: 'scale(1.2)' }} />
+                        </div>
+
+                        <div className="ticket-options-container" style={{ marginTop: '1.5rem' }}>
+                            <div className="ticket-options-header">
+                                <h3>Do you have any of the following?</h3>
+                                <p className="text-xs text-muted">Activate the option that applies to you</p>
+                            </div>
+
+                            <div className="ticket-option">
+                                <div className="flex-between w-100">
+                                    <div className="flex-align-center gap-3">
+                                        <div className={`ticket-dot ${hasJobTicket ? 'active' : ''}`}>
+                                            <Ticket weight="bold" />
+                                        </div>
+                                        <div>
+                                            <div className="font-semibold text-sm">Job-Ticket / Deutschlandticket</div>
+                                            <div className="text-xs text-muted">Ride train & bus for free</div>
+                                        </div>
+                                    </div>
+                                    <label className="toggle-switch">
+                                        <input
+                                            type="checkbox"
+                                            checked={hasJobTicket}
+                                            onChange={(e) => setHasJobTicket(e.target.checked)}
+                                        />
+                                        <span className="slider round"></span>
+                                    </label>
+                                </div>
+                                {hasJobTicket && (
+                                    <div className="ticket-badge job-ticket-badge">
+                                        <WarningCircle weight="fill" /> Train & Bus rides included
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="ticket-option">
+                                <div className="flex-between w-100">
+                                    <div className="flex-align-center gap-3">
+                                        <div className={`ticket-dot ${hasDauerparkticket ? 'active' : ''}`}>
+                                            <MapPin weight="bold" />
+                                        </div>
+                                        <div>
+                                            <div className="font-semibold text-sm">Dauerparkticket</div>
+                                            <div className="text-xs text-muted">Permanent parking ticket</div>
+                                        </div>
+                                    </div>
+                                    <label className="toggle-switch">
+                                        <input
+                                            type="checkbox"
+                                            checked={hasDauerparkticket}
+                                            onChange={(e) => setHasDauerparkticket(e.target.checked)}
+                                        />
+                                        <span className="slider round"></span>
+                                    </label>
+                                </div>
+                                {hasDauerparkticket && (
+                                    <div className="ticket-badge dauerparkticket-badge">
+                                        {!dauerparkticketStation ? (
+                                            <div className="station-input-row">
+                                                <input
+                                                    type="text"
+                                                    placeholder="Enter your station name or address"
+                                                    value={stationInput}
+                                                    onChange={(e) => setStationInput(e.target.value)}
+                                                    onKeyDown={(e) => { if (e.key === 'Enter') handleDauerparkticketConfirm(); }}
+                                                    className="station-input"
+                                                />
+                                                <button className="btn btn-sm btn-primary" onClick={handleDauerparkticketConfirm}>Set</button>
+                                            </div>
+                                        ) : (
+                                            <div className="station-confirmed">
+                                                <MapPin weight="fill" /> Station: {dauerparkticketStation}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         <button className="btn btn-primary w-100" style={{ marginTop: '2rem' }} onClick={() => setPrivacyModalOpen(false)}>Save Preferences</button>

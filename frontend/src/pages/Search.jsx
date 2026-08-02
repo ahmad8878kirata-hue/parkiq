@@ -154,7 +154,7 @@ const Search = () => {
                         className="search-input"
                     />
                     <AutocompleteInput
-                        placeholder="Where are you going? (e.g. Schlossplatz, Stuttgart)"
+                        placeholder="Where are you going? (PLZ eingeben)"
                         value={destination}
                         onChange={(e) => setDestination(e.target.value)}
                         onSelect={(data) => {

@@ -21,6 +21,17 @@ function isGenericParkingName(name) {
     return !name || /^(parkplatz|parken|garage|tiefgarage|parkhaus|parkdeck|p\+r|park\s*\+?\s*ride)$/i.test(name.trim());
 }
 
+// Only show parking sites operated by the PBW company
+// (Parkraumgesellschaft Baden-Württemberg mbH — www.pbw.de)
+const PBW_OPERATOR_KEYWORD = 'parkraumgesellschaft';
+const PBW_URL_KEYWORD = 'pbw.de';
+
+function isPbwSite(site) {
+    const operator = ((site.operator_name || site.operator) || '').toLowerCase();
+    const url = (site.public_url || '').toLowerCase();
+    return operator.includes(PBW_OPERATOR_KEYWORD) || url.includes(PBW_URL_KEYWORD);
+}
+
 function isCityOnlyAddress(address) {
     return address && /^[A-ZÄÖÜ][a-zäöüß]+(\s+[A-ZÄÖÜ][a-zäöüß]+)?$/.test(address.trim());
 }
@@ -73,6 +84,7 @@ function transformSite(site) {
         id: site.id,
         name: enhanceParkingName(site.name, address, site.type, site.description, capacity),
         rawName: site.name,
+        operator: site.operator_name || null,
         coordinates: [lat, lon],
         address,
         parkingType: site.type || null,
@@ -245,7 +257,7 @@ async function fetchAndCacheParking() {
                     timeout: 15000
                 });
                 const items = response.data?.items || [];
-                const filtered = items.filter(s => s.purpose === 'CAR').map(transformSite);
+                const filtered = items.filter(s => s.purpose === 'CAR' && isPbwSite(s)).map(transformSite);
                 
                 for (const s of filtered) {
                     if (!seenIds.has(s.id)) {
@@ -301,7 +313,7 @@ async function fetchAndCacheParkingStuttgart() {
             if (items.length === 0) break;
 
             const filtered = items
-                .filter(s => s.purpose === 'CAR')
+                .filter(s => s.purpose === 'CAR' && isPbwSite(s))
                 .map(transformSite);
 
             allSites.push(...filtered);
@@ -343,7 +355,7 @@ async function fetchParkingNear(lat, lon, radius = 10000, { skipNameResolve = fa
             if (items.length === 0) break;
 
             const filtered = items
-                .filter(s => s.purpose === 'CAR')
+                .filter(s => s.purpose === 'CAR' && isPbwSite(s))
                 .map(transformSite);
 
             allSites.push(...filtered);
