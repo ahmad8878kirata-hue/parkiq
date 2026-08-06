@@ -82,8 +82,8 @@ const Search = () => {
         });
     };
 
-    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const fullMonthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const monthNames = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+    const fullMonthNames = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 
     const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
     const firstDayOfMonth = (y, m) => new Date(y, m, 1).getDay();
@@ -135,7 +135,7 @@ const Search = () => {
                 {!showDate && (
                 <>
                 <div className="sheet-header">
-                    <h3>Outbound journey</h3>
+                    <h3>Hinfahrt</h3>
                     <button className="icon-btn close-btn" onClick={() => navigate('/home')}>
                         <X weight="bold" />
                     </button>
@@ -143,7 +143,7 @@ const Search = () => {
                 
                 <div className="mb-4">
                     <AutocompleteInput
-                        placeholder="Starting Point (e.g. Stuttgart Hbf)"
+                        placeholder="Startpunkt (z. B. Stuttgart Hbf)"
                         value={startLocation}
                         onChange={(e) => setStartLocation(e.target.value)}
                         onSelect={(data) => {
@@ -154,7 +154,7 @@ const Search = () => {
                         className="search-input"
                     />
                     <AutocompleteInput
-                        placeholder="Where are you going? (PLZ eingeben)"
+                        placeholder="Wohin möchten Sie? (PLZ eingeben)"
                         value={destination}
                         onChange={(e) => setDestination(e.target.value)}
                         onSelect={(data) => {
@@ -175,7 +175,7 @@ const Search = () => {
                         onClick={() => setShowDate(true)}
                     >
                         <CalendarBlank weight="bold" size={18} />
-                        <span>Set Date & Time</span>
+                        <span>Datum & Uhrzeit festlegen</span>
                         <span className="date-btn-value">{fullMonthNames[month].slice(0, 3)} {activeDay}, {time}</span>
                     </button>
                 ) : null}
@@ -215,9 +215,9 @@ const Search = () => {
                                     const now = new Date();
                                     setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
                                     setActiveDay(now.getDate());
-                                }}>Now</button>
+                                }}>Jetzt</button>
                             </div>
-                            <button className="btn btn-primary w-100 set-date-btn" onClick={() => setShowDate(false)}>Set</button>
+                            <button className="btn btn-primary w-100 set-date-btn" onClick={() => setShowDate(false)}>Speichern</button>
                         </div>
                     </>
                 )}
@@ -235,7 +235,7 @@ const Search = () => {
                     onClick={handleAccept}
                     disabled={loadingLocation}
                 >
-                    {loadingLocation ? 'Finding Best Match...' : 'Find Best PBW Route'}
+                    {loadingLocation ? 'Bestes Ergebnis wird ermittelt...' : 'Beste PBW-Route finden'}
                 </button>
                 )}
             </div>

@@ -413,9 +413,15 @@ app.get('/api/parking/bw', async (req, res) => {
 
 const DIRECT_CITY_PARKING_COST = 18.00;
 const DEFAULT_PARKING_PRICE = 4.00;
-const DEFAULT_HOURLY_RATE = '2 EUR/hr';
+const DEFAULT_HOURLY_RATE = '2 €/Std.';
 const MAX_WALK_PER_SEGMENT = 1000; // meters – max reasonable walk to/from a transit stop
 const MAX_WALK_TOTAL = 1500; // meters – max total walking for park→stop + stop→dest
+
+// If a direct public-transit journey to the destination is faster than this,
+// the Park & Ride (car) logic is skipped entirely and only transit is shown.
+const DIRECT_TRANSIT_MAX_MIN = 20;
+// Straight-line fallback used when HAFAS is unavailable (≈ transit speed 35 km/h)
+const DIRECT_TRANSIT_MAX_KM = 12;
 
 let hafasClient = null;
 async function getClient() {
@@ -478,7 +484,7 @@ function getParkingPricing(site) {
     const hasPriceData = site.hasFee === true && extractedPrice !== null;
 
     if (isFree) {
-        return { isFree: true, displayPrice: 'Free', numericPrice: 0 };
+        return { isFree: true, displayPrice: 'Kostenlos', numericPrice: 0 };
     }
     if (hasPriceData) {
         return { isFree: false, displayPrice: extractedPrice, numericPrice: parseFloat(extractedPrice.replace(',', '.').replace(/[^0-9.]/g, '')) || DEFAULT_PARKING_PRICE };
@@ -907,7 +913,7 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
     const driveMinutes = Math.min(240, drivingResult?.durationMin || Math.max(1, Math.round(distanceMeters(center, parkCoords) / 1000)));
 
     const segments = [
-        { mode: 'driving', path: drivingPath, label: 'Drive', durationMin: driveMinutes }
+        { mode: 'driving', path: drivingPath, label: 'Fahrt', durationMin: driveMinutes }
     ];
 
     let modeKeywords = ['station', 'halt', 'train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'];
@@ -1007,8 +1013,8 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
 
     const transitFrom = nearStop?.coordinates || parkCoords;
     const transitTo = nearDestStop?.coordinates || destCoords;
-    const stopName = nearStop?.name || 'Transit stop';
-    const destStopName = nearDestStop?.name || 'Destination stop';
+    const stopName = nearStop?.name || 'Haltestelle';
+    const destStopName = nearDestStop?.name || 'Zielhaltestelle';
 
     // Segments 2 and 4: walking
     const wResult = await fetchOSRMRoute(parkCoords, transitFrom, 'walking');
@@ -1021,7 +1027,7 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
     segments.push({
         mode: 'walking',
         path: walkPath,
-        label: 'Walk',
+        label: 'Fußweg',
         durationMin: walkMinutes,
         stopName,
         distanceMeters: Math.round(walkDistMeters)
@@ -1033,7 +1039,7 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
         segments.push({
             mode: 'cycling',
             path: cycleResult?.path || interpolatePoints(transitFrom, transitTo, 8),
-            label: 'Cycle',
+            label: 'Rad',
             durationMin: cycleResult?.durationMin || Math.max(1, Math.round(distanceMeters(transitFrom, transitTo) / 80)),
             fromStop: stopName,
             toStop: destStopName
@@ -1057,7 +1063,7 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
             segments.push({
                 mode: modeLabel === 'bus' ? 'bus' : 'train',
                 path: hafasJourney.path,
-                label: modeLabel === 'bus' ? 'Bus' : 'Train',
+                label: modeLabel === 'bus' ? 'Bus' : 'Bahn',
                 durationMin: hafasJourney.durationMin,
                 fromStop: stopName,
                 toStop: destStopName,
@@ -1079,7 +1085,7 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
             segments.push({
                 mode: modeLabel === 'bus' ? 'bus' : 'train',
                 path: fallbackPath,
-                label: modeLabel === 'bus' ? 'Bus' : 'Train',
+                label: modeLabel === 'bus' ? 'Bus' : 'Bahn',
                 durationMin: cappedMin,
                 fromStop: stopName,
                 toStop: destStopName
@@ -1113,13 +1119,164 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
     segments.push({
         mode: 'walking',
         path: walkDestPath,
-        label: 'Walk',
+        label: 'Fußweg',
         durationMin: walkDestMinutes,
         stopName: destStopName,
         distanceMeters: Math.round(walkDestDistMeters)
     });
 
     return { segments, transitFrom, transitTo, stopName, destStopName, nearStop, nearDestStop };
+}
+
+// Build a direct public-transit route from start to destination with NO car
+// segments (walk → transit → walk). Returns null when the destination is too
+// far for the direct connection to make sense.
+async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, date, timeFormatter) {
+    let journey = null;
+    let estimated = false;
+
+    if (client) {
+        try {
+            const [fromStation, toStation] = await Promise.all([
+                findNearestStationHafas(client, fromCoords),
+                findNearestStationHafas(client, toCoords)
+            ]);
+            if (fromStation?.stationId && toStation?.stationId) {
+                journey = await doHafasJourney(client, fromStation.stationId, toStation.stationId, null);
+            }
+        } catch (err) {
+            journey = null;
+        }
+    }
+
+    if (!journey) {
+        // No HAFAS available: fall back to a straight-line distance estimate
+        const distKm = distanceMeters(fromCoords, toCoords) / 1000;
+        if (distKm > DIRECT_TRANSIT_MAX_KM) return null;
+        const estMin = Math.max(3, Math.round(distKm / 35 * 60));
+        if (estMin >= DIRECT_TRANSIT_MAX_MIN) return null;
+        journey = { path: interpolatePoints(fromCoords, toCoords, 10), durationMin: estMin, legs: [] };
+        estimated = true;
+    }
+
+    if (journey.durationMin >= DIRECT_TRANSIT_MAX_MIN) return null;
+
+    const legs = journey.legs || [];
+    const transitLeg = legs.find(l => l.mode !== 'walking') || {};
+    const lineName = transitLeg.line || 'ÖPNV';
+    let modeKey = 'train';
+    const legMode = (transitLeg.mode || '').toLowerCase();
+    if (legMode === 'bus') modeKey = 'bus';
+    else if (['subway', 'tram', 'suburban', 'regional', 'express', 'train', 'national', 'highspeed'].includes(legMode)) modeKey = 'train';
+
+    // Transit-only duration (exclude HAFAS walking legs to avoid double counting)
+    let transitMin = journey.durationMin;
+    if (legs.length > 0) {
+        const walkLegsMin = legs
+            .filter(l => l.mode === 'walking')
+            .reduce((s, l) => s + (l.departure && l.arrival ? (new Date(l.arrival) - new Date(l.departure)) / 60000 : (l.duration || 0) / 60), 0);
+        transitMin = Math.max(1, Math.round(journey.durationMin - walkLegsMin));
+    }
+
+    const fromStopName = transitLeg.origin || 'Haltestelle';
+    const toStopName = transitLeg.destination || destName;
+
+    const segments = [];
+    let walkMin1 = 0;
+    let walkMin2 = 0;
+
+    if (!estimated && journey.path && journey.path.length > 1) {
+        const boardPt = journey.path[0];
+        const alightPt = journey.path[journey.path.length - 1];
+
+        const w1 = await fetchOSRMRoute(fromCoords, boardPt, 'walking');
+        const w1Dist = w1?.pathLength || distanceMeters(fromCoords, boardPt);
+        walkMin1 = w1?.durationMin || Math.max(1, Math.round(w1Dist / 80));
+        if (w1Dist > 30) {
+            segments.push({
+                mode: 'walking',
+                path: w1?.path || interpolatePoints(fromCoords, boardPt, 4),
+                label: 'Fußweg',
+                durationMin: walkMin1,
+                fromStop: 'Mein Standort',
+                toStop: fromStopName,
+                distanceMeters: Math.round(w1Dist)
+            });
+        }
+
+        segments.push({
+            mode: modeKey,
+            path: journey.path,
+            label: modeKey === 'bus' ? 'Bus' : 'Bahn',
+            durationMin: transitMin,
+            fromStop: fromStopName,
+            toStop: toStopName,
+            legs,
+            departure: journey.departure,
+            arrival: journey.arrival
+        });
+
+        const w2 = await fetchOSRMRoute(alightPt, toCoords, 'walking');
+        const w2Dist = w2?.pathLength || distanceMeters(alightPt, toCoords);
+        walkMin2 = w2?.durationMin || Math.max(1, Math.round(w2Dist / 80));
+        if (w2Dist > 30) {
+            segments.push({
+                mode: 'walking',
+                path: w2?.path || interpolatePoints(alightPt, toCoords, 4),
+                label: 'Fußweg',
+                durationMin: walkMin2,
+                fromStop: toStopName,
+                toStop: destName,
+                distanceMeters: Math.round(w2Dist)
+            });
+        }
+    } else {
+        // HAFAS unavailable: snap the drawn path to real streets/roads instead
+        // of a straight line so the route does not cut across buildings.
+        // Transit follows roads, so prefer the driving (street) profile.
+        const snapped = await fetchOSRMRoute(fromCoords, toCoords, 'driving')
+            || await fetchOSRMRoute(fromCoords, toCoords, 'walking');
+        segments.push({
+            mode: modeKey,
+            path: snapped?.path || journey.path,
+            label: modeKey === 'bus' ? 'Bus' : 'Bahn',
+            durationMin: transitMin
+        });
+    }
+
+    const totalMin = Math.min(60, walkMin1 + transitMin + walkMin2);
+
+    // Timeline aligned to the requested arrival time
+    const depTime = new Date(date);
+    depTime.setMinutes(depTime.getMinutes() - totalMin);
+    const boardTime = new Date(depTime);
+    boardTime.setMinutes(boardTime.getMinutes() + walkMin1);
+    const alightTime = new Date(boardTime);
+    alightTime.setMinutes(alightTime.getMinutes() + transitMin);
+
+    const timeline = [];
+    if (segments[0]?.mode === 'walking') {
+        timeline.push({ time: timeFormatter.format(depTime), mode: 'walking', name: 'Mein Standort', details: `${walkMin1} Min. Fußweg zu ${fromStopName}`, durationMin: walkMin1 });
+    } else {
+        timeline.push({ time: timeFormatter.format(depTime), mode: 'walking', name: 'Mein Standort', details: `Zu Fuß zur Haltestelle (${walkMin1} Min.)`, durationMin: walkMin1 });
+    }
+    timeline.push({ time: timeFormatter.format(boardTime), mode: modeKey, name: fromStopName, details: `${lineName} nehmen → ${toStopName} (${transitMin} Min.)`, durationMin: transitMin });
+    if (segments[segments.length - 1]?.mode === 'walking') {
+        timeline.push({ time: timeFormatter.format(alightTime), mode: 'walking', name: destName, details: `Fußweg zum Ziel (${walkMin2} Min.)`, durationMin: walkMin2 });
+    }
+    timeline.push({ time: timeFormatter.format(alightTime), mode: 'destination', name: destName, details: 'Ankunft am Ziel', durationMin: 0 });
+
+    return {
+        direct: true,
+        mode: modeKey,
+        segments,
+        timeline,
+        totalTime: `${totalMin} Min.`,
+        travelDuration: `${transitMin} Min.`,
+        walkTime: walkMin1 + walkMin2,
+        walkDistance: `${walkMin1 + walkMin2} Min.`,
+        transitRoute: lineName
+    };
 }
 
 app.get('/api/health', (req, res) => {
@@ -1132,7 +1289,7 @@ app.post('/api/routes', async (req, res) => {
     const routeTimer = setTimeout(() => {
         timedOut = true;
         if (!res.headersSent) {
-            res.status(504).json({ success: false, message: 'Request timed out. Please try again.' });
+            res.status(504).json({ success: false, message: 'Anfrage abgelaufen. Bitte versuchen Sie es erneut.' });
         }
     }, ROUTE_TIMEOUT_MS);
 
@@ -1166,6 +1323,22 @@ app.post('/api/routes', async (req, res) => {
                 : estimateDestCoords(destName);
         }
 
+        // ===== Direct transit fallback (no car / no parking needed) =====
+        // If the destination is close enough to reach by public transit directly,
+        // skip the Park & Ride algorithm entirely and show only transit steps.
+        // This runs BEFORE the parking fetches so a short trip never hits them.
+        if (!parkingId && startCoords && destCoords) {
+            const date = arrivalTime ? new Date(arrivalTime) : new Date();
+            const timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
+            const directRoute = await buildDirectTransitRoute(client, startCoords, destCoords, destName, date, timeFormatter);
+            if (timedOut) { clearRouteTimer(); return; }
+            if (directRoute) {
+                clearRouteTimer();
+                if (!res.headersSent) return res.json({ success: true, data: [], directTransit: directRoute });
+                return;
+            }
+        }
+
         // Use the comprehensive Baden-Württemberg cache for destination-side parking,
         // and fetch live parking near the user's destination location.
         // skipNameResolve=true avoids the slow Nominatim rate-limited geocoding
@@ -1196,7 +1369,7 @@ app.post('/api/routes', async (req, res) => {
                 liveParkings = parkingCache.data;
             } else {
                 clearRouteTimer(); 
-                if (!res.headersSent) return res.status(503).json({ success: false, message: 'No live parking data available near destination' });
+                if (!res.headersSent) return res.status(503).json({ success: false, message: 'Keine Live-Parkplatzdaten in der Nähe des Ziels verfügbar' });
                 return;
             }
         }
@@ -1210,7 +1383,7 @@ app.post('/api/routes', async (req, res) => {
                     liveParkings = [cachedPark];
                 } else {
                     clearRouteTimer(); 
-                    if (!res.headersSent) return res.status(404).json({ success: false, message: 'Selected parking not found' });
+                    if (!res.headersSent) return res.status(404).json({ success: false, message: 'Ausgewählter Parkplatz nicht gefunden' });
                     return;
                 }
             }
@@ -1245,7 +1418,7 @@ app.post('/api/routes', async (req, res) => {
             let lineName = 'S-Bahn';
             let modeLabel = 'transit';
             if (transportMode === 'bus') { lineName = 'Bus'; modeLabel = 'bus'; }
-            else if (transportMode === 'cycling' || transportMode === 'bicycle') { lineName = 'Bicycle'; modeLabel = 'cycling'; }
+            else if (transportMode === 'cycling' || transportMode === 'bicycle') { lineName = 'Fahrrad'; modeLabel = 'cycling'; }
 
             const totalCost = parkingPriceNum;
             const savings = Math.max(0, DIRECT_CITY_PARKING_COST - totalCost);
@@ -1262,12 +1435,12 @@ app.post('/api/routes', async (req, res) => {
             destArrive.setMinutes(destArrive.getMinutes() + walkMin2);
 
             const timeline = [
-                { time: timeFormatter.format(depTime), mode: 'driving', name: 'Current Location', details: 'Drive to parking', durationMin: driveMinutes },
-                { time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, details: 'Park car', durationMin: 0 },
-                { time: timeFormatter.format(transitDep), mode: 'walking', name: stopName, details: `Walk ${walkMin1} min to ${stopName}`, durationMin: walkMin1 },
-                { time: timeFormatter.format(transitArr), mode: modeLabel, name: stopName, details: `Board ${lineName} → ${destStopName} (${transitMin} min)`, durationMin: transitMin },
-                { time: timeFormatter.format(destArrive), mode: 'walking', name: destName, details: `Walk to destination (${walkMin2} min)`, durationMin: walkMin2 },
-                { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, details: 'Arrive at destination', durationMin: 0 },
+                { time: timeFormatter.format(depTime), mode: 'driving', name: 'Mein Standort', details: 'Fahrt zum Parkplatz', durationMin: driveMinutes },
+                { time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, details: 'Auto parken', durationMin: 0 },
+                { time: timeFormatter.format(transitDep), mode: 'walking', name: stopName, details: `${walkMin1} Min. Fußweg zu ${stopName}`, durationMin: walkMin1 },
+                { time: timeFormatter.format(transitArr), mode: modeLabel, name: stopName, details: `${lineName} nehmen → ${destStopName} (${transitMin} Min.)`, durationMin: transitMin },
+                { time: timeFormatter.format(destArrive), mode: 'walking', name: destName, details: `Fußweg zum Ziel (${walkMin2} Min.)`, durationMin: walkMin2 },
+                { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, details: 'Ankunft am Ziel', durationMin: 0 },
             ];
 
             const pricing = getParkingPricing(park);
@@ -1282,10 +1455,10 @@ app.post('/api/routes', async (req, res) => {
                         ticketPrice: '0.00',
                         totalCost: totalCost.toFixed(2),
                         savings: savings.toFixed(2),
-                        totalTime: `${totalTimeMinutes} min`,
-                        travelDuration: `${transitMin} min`,
+                        totalTime: `${totalTimeMinutes} Min.`,
+                        travelDuration: `${transitMin} Min.`,
                         walkTime: walkMin1 + walkMin2,
-                        walkDistance: `${walkMin1 + walkMin2} min`,
+                        walkDistance: `${walkMin1 + walkMin2} Min.`,
                         transitRoute: lineName,
                         segments,
                         timeline,
@@ -1299,7 +1472,7 @@ app.post('/api/routes', async (req, res) => {
                         description: park.description,
                         isFree: pricing.isFree,
                         displayPrice: pricing.displayPrice,
-                        hourlyRate: pricing.isFree ? 'Free' : pricing.displayPrice
+                        hourlyRate: pricing.isFree ? 'Kostenlos' : pricing.displayPrice
                     }]
                 });
             } else {
@@ -1388,8 +1561,8 @@ app.post('/api/routes', async (req, res) => {
                 parkingPrice: parkingPrice.toFixed(2),
                 totalCost: totalCost.toFixed(2),
                 savings: savings.toFixed(2),
-                totalTime: `${driveMinutes + totalWalkTimeMin + transitTimeEst} min`,
-                travelDuration: `${transitTimeEst} min`,
+                totalTime: `${driveMinutes + totalWalkTimeMin + transitTimeEst} Min.`,
+                travelDuration: `${transitTimeEst} Min.`,
                 walkTime: totalWalkTimeMin,
                 walkDistance: `${oneWayWalkMeters}m`,
                 totalWalkEstimate: totalWalkMeters,
@@ -1410,7 +1583,7 @@ app.post('/api/routes', async (req, res) => {
                 description: park.description,
                 isFree: pricing.isFree,
                 displayPrice: pricing.displayPrice,
-                hourlyRate: pricing.isFree ? 'Free' : pricing.displayPrice
+                hourlyRate: pricing.isFree ? 'Kostenlos' : pricing.displayPrice
             });
         }
 
@@ -1424,7 +1597,7 @@ app.post('/api/routes', async (req, res) => {
         clearRouteTimer();
         console.error("Error fetching route:", error);
         if (!res.headersSent) {
-            res.status(500).json({ success: false, error: 'Failed to calculate route' });
+            res.status(500).json({ success: false, error: 'Route konnte nicht berechnet werden' });
         }
     } finally {
         clearRouteTimer();

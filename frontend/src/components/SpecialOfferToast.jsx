@@ -8,7 +8,7 @@ const SpecialOfferToast = ({ message, onClose }) => {
                 <Sparkle weight="fill" />
             </div>
             <div className="toast-content">
-                <div className="toast-title">Special Rate Available!</div>
+                <div className="toast-title">Sonderpreis verfügbar!</div>
                 <div className="toast-message">{message}</div>
             </div>
             <button className="toast-close" onClick={onClose}>

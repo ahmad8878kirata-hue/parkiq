@@ -12,7 +12,7 @@ function App() {
   return (
     <ParkingProvider>
       <Router>
-        <Suspense fallback={<div className="view" style={{display:'flex',alignItems:'center',justifyContent:'center',fontSize:'2rem',color:'var(--primary)'}}>Loading...</div>}>
+        <Suspense fallback={<div className="view" style={{display:'flex',alignItems:'center',justifyContent:'center',fontSize:'2rem',color:'var(--primary)'}}>Wird geladen...</div>}>
           <Routes>
             <Route path="/" element={<Onboarding />} />
             <Route path="/selection" element={<Selection />} />

@@ -34,7 +34,7 @@ const Selection = () => {
         <div className="view selection-view">
             <div className="selection-header">
                 <h1 className="logo-text">Park<span>IQ</span></h1>
-                <p className="selection-subtitle">Choose your parking style</p>
+                <p className="selection-subtitle">Wählen Sie Ihren Parkart-Typ</p>
             </div>
 
             <div className="selection-container">
@@ -44,16 +44,16 @@ const Selection = () => {
                     </div>
                     <div className="selection-content">
                         <h3>Kurzzeitparker</h3>
-                        <p>Perfect for shopping, meetings, or short visits. Hourly rates apply.</p>
-                        <div className="selection-tag">Short-term</div>
+                        <p>Ideal für Einkäufe, Termine oder kurze Besuche. Es gelten Stundensätze.</p>
+                        <div className="selection-tag">KURZZEIT</div>
                     </div>
                 </div>
             </div>
 
             <div className="ticket-options-container">
                 <div className="ticket-options-header">
-                    <h3>Do you have any of the following?</h3>
-                    <p className="text-xs text-muted">Activate the option that applies to you</p>
+                    <h3>Haben Sie eine der folgenden Optionen?</h3>
+                    <p className="text-xs text-muted">Aktivieren Sie die für Sie zutreffende Option</p>
                 </div>
 
                 <div className="ticket-option glass-panel">
@@ -64,7 +64,7 @@ const Selection = () => {
                             </div>
                             <div>
                                 <div className="font-semibold text-sm">Job-Ticket / Deutschlandticket</div>
-                                <div className="text-xs text-muted">Ride train & bus for free</div>
+                                <div className="text-xs text-muted">Kostenlose Nutzung von Bus & Bahn</div>
                             </div>
                         </div>
                         <label className="toggle-switch">
@@ -78,7 +78,7 @@ const Selection = () => {
                     </div>
                     {hasJobTicket && (
                         <div className="ticket-badge job-ticket-badge">
-                            <WarningCircle weight="fill" /> Train & Bus rides included
+                            <WarningCircle weight="fill" /> Bus- & Bahnfahrten inklusive
                         </div>
                     )}
                 </div>
@@ -91,7 +91,7 @@ const Selection = () => {
                             </div>
                             <div>
                                 <div className="font-semibold text-sm">Dauerparkticket</div>
-                                <div className="text-xs text-muted">Permanent parking ticket</div>
+                                <div className="text-xs text-muted">Dauerparkkarte</div>
                             </div>
                         </div>
                         <label className="toggle-switch">
@@ -109,14 +109,14 @@ const Selection = () => {
                                 <div className="station-input-row">
                                     <input
                                         type="text"
-                                        placeholder="Enter your station name or address"
+                                        placeholder="Geben Sie Ihren Stationsnamen oder Ihre Adresse ein"
                                         value={stationInput}
                                         onChange={(e) => setStationInput(e.target.value)}
                                         onKeyDown={(e) => { if (e.key === 'Enter') handleDauerparkticketConfirm(); }}
                                         className="station-input"
                                         onClick={(e) => e.stopPropagation()}
                                     />
-                                    <button className="btn btn-sm btn-primary" onClick={(e) => { e.stopPropagation(); handleDauerparkticketConfirm(); }}>Set</button>
+                                    <button className="btn btn-sm btn-primary" onClick={(e) => { e.stopPropagation(); handleDauerparkticketConfirm(); }}>Festlegen</button>
                                 </div>
                             ) : (
                                 <div className="station-confirmed">
@@ -128,12 +128,12 @@ const Selection = () => {
                 </div>
 
                 <div className="ticket-info-note">
-                    <u>! Bahncar Rabatte werden derzeit nicht unterstützt</u>
+                    <u>! BahnCard-Rabatte werden derzeit nicht unterstützt.</u>
                 </div>
             </div>
 
             <div className="selection-footer">
-                <p>Prices include VAT and are subject to availability.</p>
+                <p>Preise inkl. MwSt. und abhängig von der Verfügbarkeit.</p>
             </div>
         </div>
     );

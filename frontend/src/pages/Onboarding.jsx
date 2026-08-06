@@ -51,16 +51,16 @@ const Onboarding = () => {
             id: 'splash',
             content: (
                 <div className="splash-content" style={{textAlign: 'center', padding: '2rem'}}>
-                    <img src="/assets/welcome_simple.png" alt="Welcome" style={{width: '240px', marginBottom: '2rem', borderRadius: 'var(--radius-lg)'}} />
+                    <img src="/assets/welcome_simple.png" alt="Willkommen" style={{width: '240px', marginBottom: '2rem', borderRadius: 'var(--radius-lg)'}} />
                     <h1 className="logo-text">Park<span>IQ</span></h1>
                     <p className="tagline">Smart Park & Ride</p>
-                    <p className="sub-tagline">Plan your optimal parking and transit route</p>
+                    <p className="sub-tagline">Planen Sie Ihre optimale Park- und ÖPNV-Route</p>
                 </div>
             )
         },
         {
-            title: "Smart Park-and-Ride Decisions",
-            desc: "Find affordable parking and the best public transport connection to your destination.",
+            title: "Intelligente Park-and-Ride-Entscheidungen",
+            desc: "Finden Sie günstige Parkplätze und die beste ÖPNV-Verbindung zu Ihrem Ziel.",
             illustration: (
                <div className="mock-map-ui">
                    <div className="mock-map-path"></div>
@@ -72,21 +72,21 @@ const Onboarding = () => {
             )
         },
         {
-            title: "Smart Recommendations",
-            desc: "Park-and-Ride options based on cost and time.",
+            title: "Smarte Empfehlungen",
+            desc: "Park-and-Ride-Optionen basierend auf Kosten und Zeit.",
             illustration: (
                <div className="recommendation-cards">
                    <div className="rec-card best-price">
                        <div className="rec-icon"><Coins weight="fill" /></div>
                        <div className="rec-info">
-                           <h4>Best Price</h4>
+                           <h4>Bester Preis</h4>
                            <p>€ 5.35</p>
                        </div>
                    </div>
                    <div className="rec-card fastest">
                        <div className="rec-icon"><Lightning weight="fill" /></div>
                        <div className="rec-info">
-                           <h4>Fastest</h4>
+                           <h4>Am schnellsten</h4>
                            <p>45 min</p>
                        </div>
                    </div>
@@ -94,8 +94,8 @@ const Onboarding = () => {
             )
         },
         {
-            title: "Save Time & Money",
-            desc: "Optimized decisions for efficient travel.",
+            title: "Zeit und Geld sparen",
+            desc: "Optimierte Entscheidungen für effizientes Reisen.",
             illustration: (
                <div className="money-time-graphic" style={{alignSelf: 'center', marginTop: '2rem'}}>
                    <div className="circle pulse">
@@ -108,8 +108,8 @@ const Onboarding = () => {
             )
         },
         {
-            title: "Eco-Friendly Parking",
-            desc: "By combining driving and public transit, you significantly lower CO2 emissions per trip",
+            title: "Umweltfreundliches Parken",
+            desc: "Durch die Kombination von Auto und ÖPNV reduzieren Sie Ihre CO2-Emissionen pro Fahrt erheblich.",
             illustration: (
                <div className="eco-graphic" style={{alignSelf: 'center', marginTop: '3rem'}}>
                    <Leaf weight="fill" className="main-eco-icon" />
@@ -118,8 +118,8 @@ const Onboarding = () => {
             )
         },
         {
-            title: "Healthy Commute",
-            desc: "ParkIQ tracks your short walks between points to help you reach your daily step goals",
+            title: "Gesundes Pendeln",
+            desc: "ParkIQ erfasst Ihre kurzen Fußwege zwischen den Stationen, damit Sie Ihr tägliches Schrittziel erreichen.",
             illustration: (
                <div className="health-graphic" style={{alignSelf: 'center', marginTop: '2rem'}}>
                    <Sneaker weight="fill" className="main-health-icon" />
@@ -136,10 +136,10 @@ const Onboarding = () => {
                    <div className="location-icon-wrapper">
                       <MapPin weight="fill" />
                    </div>
-                   <h2 className="slide-title">Use Your Current Location</h2>
-                   <p className="slide-desc">To show you the best parking spots and calculate the fastest route, ParkIQ needs to know where you are.</p>
-                    <button className="btn btn-primary btn-large btn-glow" onClick={handleEnableLocation} style={{marginTop: '2rem'}}>Enable Location</button>
-                    <button className="btn btn-text" onClick={() => { setLocationEnabled(false); navigate('/selection'); }} style={{marginTop: '1rem'}}>Not now</button>
+                    <h2 className="slide-title">Aktuellen Standort verwenden</h2>
+                    <p className="slide-desc">Um Ihnen die besten Parkplätze anzuzeigen und die schnellste Route zu berechnen, benötigt ParkIQ Ihren Standort.</p>
+                     <button className="btn btn-primary btn-large btn-glow" onClick={handleEnableLocation} style={{marginTop: '2rem'}}>Standort aktivieren</button>
+                     <button className="btn btn-text" onClick={() => { setLocationEnabled(false); navigate('/selection'); }} style={{marginTop: '1rem'}}>Nicht jetzt</button>
                </div>
             )
         }
@@ -191,13 +191,13 @@ const Onboarding = () => {
                                 <MapPin weight="fill" size={24} />
                             </div>
                         </div>
-                        <h3 style={{textAlign: 'center', marginBottom: '0.5rem', color: 'var(--text-main)'}}>Allow ParkIQ to access this device's location?</h3>
+                        <h3 style={{textAlign: 'center', marginBottom: '0.5rem', color: 'var(--text-main)'}}>Darf ParkIQ auf den Standort dieses Geräts zugreifen?</h3>
                         <div style={{display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1.5rem'}}>
                             <button className="btn w-100" style={{background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', justifyContent: 'flex-start', padding: '1rem'}} onClick={() => handlePermissionChoice('all_time')}>
-                                Allow all the time
+                                Immer erlauben
                             </button>
                             <button className="btn w-100" style={{background: 'var(--bg-color)', border: '1px solid var(--border-color)', color: 'var(--text-main)', justifyContent: 'flex-start', padding: '1rem'}} onClick={() => handlePermissionChoice('dont_allow')}>
-                                Don't allow
+                                Nicht erlauben
                             </button>
                         </div>
                     </div>

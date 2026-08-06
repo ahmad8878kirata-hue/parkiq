@@ -9,6 +9,7 @@ export const ParkingProvider = ({ children }) => {
     const [dauerparkticketStation, setDauerparkticketStation] = useState('');
     const [dauerparkticketStationCoords, setDauerparkticketStationCoords] = useState(null);
     const [locationEnabled, setLocationEnabled] = useState(null);
+    const [analyticsEnabled, setAnalyticsEnabled] = useState(true);
 
     return (
         <ParkingContext.Provider value={{
@@ -17,7 +18,8 @@ export const ParkingProvider = ({ children }) => {
             hasJobTicket, setHasJobTicket,
             dauerparkticketStation, setDauerparkticketStation,
             dauerparkticketStationCoords, setDauerparkticketStationCoords,
-            locationEnabled, setLocationEnabled
+            locationEnabled, setLocationEnabled,
+            analyticsEnabled, setAnalyticsEnabled
         }}>
             {children}
         </ParkingContext.Provider>

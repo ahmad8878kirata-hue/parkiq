@@ -13,7 +13,7 @@ const API_BASE = 'http://localhost:5000';
 
 const Home = () => {
     const navigate = useNavigate();
-    const { parkingType, locationEnabled, hasJobTicket, setHasJobTicket, hasDauerparkticket, setHasDauerparkticket, dauerparkticketStation, setDauerparkticketStation, setDauerparkticketStationCoords } = useParking();
+    const { parkingType, locationEnabled, hasJobTicket, setHasJobTicket, hasDauerparkticket, setHasDauerparkticket, dauerparkticketStation, setDauerparkticketStation, setDauerparkticketStationCoords, analyticsEnabled, setAnalyticsEnabled } = useParking();
     const mapRef = useRef(null);
     const mapInstance = useRef(null);
     const markerInstance = useRef(null);
@@ -88,15 +88,15 @@ const Home = () => {
                 markerInstance.current?.setLatLng([lat, lon]);
                 setLocationStatus(data[0].display_name.split(',')[0]);
             } else {
-                alert("Location not found");
+                alert("Standort nicht gefunden");
             }
         } catch (e) {
             console.error('Failed to geocode location:', e);
         }
     };
 
-    const searchMonthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const searchFullMonthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const searchMonthNames = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
+    const searchFullMonthNames = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 
     const searchDaysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
     const searchFirstDayOfMonth = (y, m) => new Date(y, m, 1).getDay();
@@ -244,7 +244,7 @@ const Home = () => {
                     mapInstance.current?.setView([lat, lng], 14, { animate: true });
                     setEditingLocation(false);
                     isPickingLocationRef.current = false;
-                    setLocationStatus('Loading location...');
+                    setLocationStatus('Standort wird geladen...');
                     try {
                         const res = await fetch(`${API_BASE}/api/geocode/reverse?format=json&lat=${lat}&lon=${lng}`);
                         const data = await res.json();
@@ -252,14 +252,14 @@ const Home = () => {
                             const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];
                             setLocationStatus(name);
                         } else {
-                            setLocationStatus('Custom Location');
+                            setLocationStatus('Eigener Standort');
                         }
-                    } catch { setLocationStatus('Custom Location'); }
+                    } catch { setLocationStatus('Eigener Standort'); }
                 } else {
                     destMarkerRef.current?.setLatLng([lat, lng]);
                     destMarkerRef.current?.setOpacity(1);
                     setDestCoords([lat, lng]);
-                    setDestStatus('Loading...');
+                    setDestStatus('Wird geladen...');
                     try {
                         const res = await fetch(`${API_BASE}/api/geocode/reverse?format=json&lat=${lat}&lon=${lng}`);
                         const data = await res.json();
@@ -267,9 +267,9 @@ const Home = () => {
                             const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];
                             setDestStatus(name);
                         } else {
-                            setDestStatus('Selected location');
+                            setDestStatus('Ausgewählter Standort');
                         }
-                    } catch { setDestStatus('Selected location'); }
+                    } catch { setDestStatus('Ausgewählter Standort'); }
                 }
             });
 
@@ -279,17 +279,17 @@ const Home = () => {
         const defaultCenter = [48.6616, 9.0654]; // Center of Baden-Württemberg
 
         if (locationEnabled && "geolocation" in navigator) {
-            setLocationStatus('Locating...');
+            setLocationStatus('Standort wird ermittelt...');
             navigator.geolocation.getCurrentPosition(
                 (pos) => {
                     const ll = [pos.coords.latitude, pos.coords.longitude];
                     initMap(ll, 14);
-                    setLocationStatus('My Location');
+                    setLocationStatus('Mein Standort');
                     setStartCoords(ll);
                 },
                 () => {
                     initMap(defaultCenter, 9);
-                    setLocationStatus('Location access denied');
+                    setLocationStatus('Standortzugriff verweigert');
                 },
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
@@ -327,7 +327,7 @@ const Home = () => {
                         weight: 2,
                         opacity: 1
                     });
-                    marker.bindPopup(`<b>${site.name}</b><br/>${site.address || ''}<br/>Capacity: ${site.totalCapacity}`);
+                    marker.bindPopup(`<b>${site.name}</b><br/>${site.address || ''}<br/>Kapazität: ${site.totalCapacity}`);
                     parkingMarkersLayerRef.current.addLayer(marker);
                 });
             })
@@ -365,9 +365,9 @@ const Home = () => {
                         const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];
                         setLocationStatus(name);
                     } else {
-                        setLocationStatus('My Location');
+                        setLocationStatus('Mein Standort');
                     }
-                } catch { setLocationStatus('My Location'); }
+                } catch { setLocationStatus('Mein Standort'); }
             },
             () => { },
             { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
@@ -417,10 +417,10 @@ const Home = () => {
                                 else document.body.classList.remove('dark-mode');
                                 setSettingsOpen(false);
                             }}>
-                                {darkMode ? '☀️ Light Mode' : '🌙 Dark Mode'}
+                                {darkMode ? '☀️ Hellmodus' : '🌙 Nachtmodus'}
                             </div>
                             <div className="dropdown-item" onClick={() => { setPrivacyModalOpen(true); setSettingsOpen(false); }}>
-                                🔒 Privacy Settings
+                                🔒 Datenschutzeinstellungen
                             </div>
                             <div className="dropdown-item" onClick={() => { setProfileModalOpen(true); setSettingsOpen(false); }}>
                                 ℹ️ Info &amp; Hilfe
@@ -431,23 +431,23 @@ const Home = () => {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                     <div style={{ fontWeight: 700, color: 'var(--primary)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                        {parkingType === 'kurz' ? 'Short-term' : 'Permanent'}
+                        {parkingType === 'kurz' ? 'Kurzzeit' : 'Dauerparken'}
                     </div>
                     {editingLocation ? (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--primary)', color: 'white', padding: '0.4rem 1rem', borderRadius: '2rem', fontSize: '0.875rem', fontWeight: 'bold', boxShadow: '0 4px 10px rgba(244, 63, 94, 0.3)' }}>
-                            Tap anywhere on map
+                            Tippen Sie irgendwo auf die Karte
                             <button onClick={() => { setEditingLocation(false); isPickingLocationRef.current = false; }} style={{ background: 'rgba(255,255,255,0.2)', border: 'none', color: 'white', cursor: 'pointer', marginLeft: '0.5rem', width: '24px', height: '24px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><X weight="bold" /></button>
                         </div>
                     ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
                             <div style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '0.9rem' }}>
-                                {locationStatus || 'Set your departure point'}
+                                {locationStatus || 'Startpunkt festlegen'}
                             </div>
                             <button
                                 onClick={() => { setEditingLocation(true); isPickingLocationRef.current = true; }}
                                 style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'var(--surface)', border: '1px solid var(--border-color)', color: 'var(--primary)', padding: '0.3rem 0.75rem', borderRadius: '1rem', fontSize: '0.75rem', fontWeight: '600', cursor: 'pointer', boxShadow: 'var(--shadow-sm)' }}
                             >
-                                <Pencil weight="bold" /> Change My Location
+                                <Pencil weight="bold" /> Standort ändern
                             </button>
                         </div>
                     )}
@@ -462,7 +462,7 @@ const Home = () => {
                 </button>
                 {destCoords && (
                     <div style={{ fontSize: '0.65rem', color: 'var(--primary)', marginTop: '0.25rem', textAlign: 'right', fontWeight: 500, background: 'rgba(244,63,94,0.1)', borderRadius: '0.5rem', padding: '0.2rem 0.5rem' }}>
-                        → {destStatus || 'Selected'}
+                        → {destStatus || 'Ausgewählt'}
                     </div>
                 )}
             </div>
@@ -491,24 +491,24 @@ const Home = () => {
                             <div className="parking-sheet-stats">
                                 <div className="ps-stat">
                                     <Car weight="fill" className="ps-stat-icon" />
-                                    <div className="ps-stat-label">Capacity</div>
+                                    <div className="ps-stat-label">Kapazität</div>
                                     <div className="ps-stat-value">{selectedParking.totalCapacity}</div>
                                 </div>
                                 <div className="ps-stat">
                                     <MapPin weight="fill" className="ps-stat-icon" />
-                                    <div className="ps-stat-label">Location</div>
+                                    <div className="ps-stat-label">Standort</div>
                                     <div className="ps-stat-value">{selectedParking.coordinates[0].toFixed(3)}, {selectedParking.coordinates[1].toFixed(3)}</div>
                                 </div>
                                 {selectedParking.amenities?.evCharging && (
                                     <div className="ps-stat">
                                         <ChargingStation weight="fill" className="ps-stat-icon" />
-                                        <div className="ps-stat-label">EV Charging</div>
-                                        <div className="ps-stat-value">Available</div>
+                                        <div className="ps-stat-label">E-Ladestation</div>
+                                        <div className="ps-stat-value">Verfügbar</div>
                                     </div>
                                 )}
                             </div>
                             <button className="btn btn-primary w-100 mt-2" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
-                                <NavigationArrow weight="bold" className="mr-2" /> Route from here
+                                <NavigationArrow weight="bold" className="mr-2" /> Route ab hier
                             </button>
                         </div>
                     </div>
@@ -518,7 +518,7 @@ const Home = () => {
             <div className="bottom-controls">
                 <div className="search-container" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
                     <MagnifyingGlass weight="bold" className="search-icon" />
-                    <div className="search-text">{destStatus ? destStatus : 'Click map to set destination'}</div>
+                    <div className="search-text">{destStatus ? destStatus : 'Auf Karte tippen, um Ziel festzulegen'}</div>
                     <button className="mic-btn" onClick={(e) => {
                         e.stopPropagation();
                         setDestCoords(null);
@@ -534,7 +534,7 @@ const Home = () => {
                 <div className="search-sheet-overlay visible" onClick={() => setShowSearchSheet(false)}>
                     <div className="search-sheet" onClick={e => e.stopPropagation()}>
                         <div className="sheet-header">
-                            <h3>Outbound journey</h3>
+                            <h3>Hinfahrt</h3>
                             <button className="icon-btn close-btn" onClick={() => setShowSearchSheet(false)}>
                                 <X weight="bold" />
                             </button>
@@ -542,7 +542,7 @@ const Home = () => {
 
                         <div className="mb-4">
                             <AutocompleteInput
-                                placeholder="Starting Point (e.g. Stuttgart Hbf)"
+                                placeholder="Startpunkt (z. B. Stuttgart Hbf)"
                                 value={searchStartLocation}
                                 onChange={(e) => setSearchStartLocation(e.target.value)}
                                 onSelect={(data) => {
@@ -553,7 +553,7 @@ const Home = () => {
                                 className="search-input"
                             />
                             <AutocompleteInput
-                                placeholder="Where are you going? (PLZ eingeben)"
+                                placeholder="Wohin möchten Sie? (PLZ eingeben)"
                                 value={searchDestination}
                                 onChange={(e) => setSearchDestination(e.target.value)}
                                 onSelect={(data) => {
@@ -586,7 +586,7 @@ const Home = () => {
                                         onClick={() => setSearchShowDate(true)}
                                     >
                                         <CalendarBlank weight="bold" size={18} />
-                                        <span>Set Date & Time</span>
+                                        <span>Datum & Uhrzeit festlegen</span>
                                         <span className="date-btn-value">{searchFullMonthNames[searchMonth].slice(0, 3)} {searchActiveDay}, {searchTime}</span>
                                     </button>
                                 )}
@@ -628,10 +628,10 @@ const Home = () => {
                                             setSearchTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
                                             setSearchActiveDay(now.getDate());
                                             setSearchTimeConfirmed(false);
-                                        }}>Now</button>
+                                        }}>Jetzt</button>
                                     </div>
                                     <button className="btn btn-primary w-100 set-date-btn" onClick={() => { setSearchShowDate(false); setSearchTimeConfirmed(true); }}>
-                                        <span style={{ marginRight: '0.4rem' }}>✔</span> Save
+                                        <span style={{ marginRight: '0.4rem' }}>✔</span> Speichern
                                     </button>
                                 </div>
                             </>
@@ -650,7 +650,7 @@ const Home = () => {
                                 onClick={handleSearchAccept}
                                 disabled={loadingLocation}
                             >
-                                {loadingLocation ? 'Finding Best Match...' : 'Find Best PBW Route'}
+                                {loadingLocation ? 'Bestes Ergebnis wird ermittelt...' : 'Beste PBW-Route finden'}
                             </button>
                         )}
                     </div>
@@ -661,29 +661,29 @@ const Home = () => {
             {privacyModalOpen && (
                 <div className="parking-sheet-overlay visible" onClick={() => setPrivacyModalOpen(false)}>
                     <div className="parking-sheet expanded" onClick={e => e.stopPropagation()} style={{ padding: '2rem', height: 'auto', bottom: 0 }}>
-                        <h3 style={{ marginBottom: '0.5rem' }}>Privacy Settings</h3>
-                        <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.875rem' }}>Manage your data permissions and tracking preferences.</p>
+                        <h3 style={{ marginBottom: '0.5rem' }}>Datenschutzeinstellungen</h3>
+                        <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem', fontSize: '0.875rem' }}>Verwalten Sie Ihre Datenzugriffe und Tracking-Einstellungen.</p>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0', borderBottom: '1px solid var(--border-color)' }}>
                             <div>
-                                <h4 style={{ margin: '0 0 0.25rem 0' }}>Location Access</h4>
-                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Required for routing and nearby parking</span>
+                                <h4 style={{ margin: '0 0 0.25rem 0' }}>Standortzugriff</h4>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Erforderlich für Routenführung und Parkplätze in der Nähe</span>
                             </div>
                             <input type="checkbox" checked={locationEnabled} readOnly style={{ transform: 'scale(1.2)' }} />
                         </div>
 
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0', borderBottom: '1px solid var(--border-color)' }}>
                             <div>
-                                <h4 style={{ margin: '0 0 0.25rem 0' }}>Analytics & Usage</h4>
-                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Help us improve the ParkIQ experience</span>
+                                <h4 style={{ margin: '0 0 0.25rem 0' }}>Analyse & Nutzung</h4>
+                                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Helfen Sie uns, das ParkIQ-Erlebnis zu verbessern</span>
                             </div>
-                            <input type="checkbox" defaultChecked style={{ transform: 'scale(1.2)' }} />
+                            <input type="checkbox" checked={analyticsEnabled} onChange={(e) => setAnalyticsEnabled(e.target.checked)} style={{ transform: 'scale(1.2)' }} />
                         </div>
 
                         <div className="ticket-options-container" style={{ marginTop: '1.5rem' }}>
                             <div className="ticket-options-header">
-                                <h3>Do you have any of the following?</h3>
-                                <p className="text-xs text-muted">Activate the option that applies to you</p>
+                                <h3>Haben Sie eine der folgenden Optionen?</h3>
+                                <p className="text-xs text-muted">Aktivieren Sie die für Sie zutreffende Option</p>
                             </div>
 
                             <div className="ticket-option">
@@ -694,7 +694,7 @@ const Home = () => {
                                         </div>
                                         <div>
                                             <div className="font-semibold text-sm">Job-Ticket / Deutschlandticket</div>
-                                            <div className="text-xs text-muted">Ride train & bus for free</div>
+                                            <div className="text-xs text-muted">Kostenlose Nutzung von Bus & Bahn</div>
                                         </div>
                                     </div>
                                     <label className="toggle-switch">
@@ -708,7 +708,7 @@ const Home = () => {
                                 </div>
                                 {hasJobTicket && (
                                     <div className="ticket-badge job-ticket-badge">
-                                        <WarningCircle weight="fill" /> Train & Bus rides included
+                                        <WarningCircle weight="fill" /> Bus- & Bahnfahrten inklusive
                                     </div>
                                 )}
                             </div>
@@ -721,7 +721,7 @@ const Home = () => {
                                         </div>
                                         <div>
                                             <div className="font-semibold text-sm">Dauerparkticket</div>
-                                            <div className="text-xs text-muted">Permanent parking ticket</div>
+                                            <div className="text-xs text-muted">Dauerparkkarte</div>
                                         </div>
                                     </div>
                                     <label className="toggle-switch">
@@ -739,13 +739,13 @@ const Home = () => {
                                             <div className="station-input-row">
                                                 <input
                                                     type="text"
-                                                    placeholder="Enter your station name or address"
+                                                    placeholder="Geben Sie Ihren Stationsnamen oder Ihre Adresse ein"
                                                     value={stationInput}
                                                     onChange={(e) => setStationInput(e.target.value)}
                                                     onKeyDown={(e) => { if (e.key === 'Enter') handleDauerparkticketConfirm(); }}
                                                     className="station-input"
                                                 />
-                                                <button className="btn btn-sm btn-primary" onClick={handleDauerparkticketConfirm}>Set</button>
+                                                <button className="btn btn-sm btn-primary" onClick={handleDauerparkticketConfirm}>Festlegen</button>
                                             </div>
                                         ) : (
                                             <div className="station-confirmed">
@@ -757,7 +757,7 @@ const Home = () => {
                             </div>
                         </div>
 
-                        <button className="btn btn-primary w-100" style={{ marginTop: '2rem' }} onClick={() => setPrivacyModalOpen(false)}>Save Preferences</button>
+                        <button className="btn btn-primary w-100" style={{ marginTop: '2rem' }} onClick={() => setPrivacyModalOpen(false)}>Einstellungen speichern</button>
                     </div>
                 </div>
             )}
