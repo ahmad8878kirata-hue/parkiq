@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { API_BASE } from '../config';
 import './AutocompleteInput.css';
 
 const AutocompleteInput = ({
@@ -25,7 +26,7 @@ const AutocompleteInput = ({
         }
         try {
             const res = await fetch(
-                `http://localhost:5000/api/geocode/search?format=json&q=${encodeURIComponent(query.trim())}&addressdetails=1&limit=5&countrycodes=de`
+                `${API_BASE}/api/geocode/search?format=json&q=${encodeURIComponent(query.trim())}&addressdetails=1&limit=5&countrycodes=de`
             );
             if (!res.ok) return;
             const data = await res.json();

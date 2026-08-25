@@ -1298,6 +1298,46 @@ app.post('/api/routes', async (req, res) => {
     try {
         const { destination, startCoords, arrivalTime, parkingId, transportMode, maxTimeMinutes = 120, destCoords: reqDestCoords } = req.body;
 
+        // --- Input validation ---
+        const isValidCoord = (c) => Array.isArray(c) && c.length === 2
+            && typeof c[0] === 'number' && typeof c[1] === 'number'
+            && c[0] >= -90 && c[0] <= 90 && c[1] >= -180 && c[1] <= 180
+            && !isNaN(c[0]) && !isNaN(c[1]);
+
+        if (!reqDestCoords && (!destination || typeof destination !== 'string' || !destination.trim())) {
+            clearRouteTimer();
+            return res.status(400).json({ success: false, message: 'Ziel ist erforderlich.' });
+        }
+
+        if (startCoords && !isValidCoord(startCoords)) {
+            clearRouteTimer();
+            return res.status(400).json({ success: false, message: 'Ungültige Startkoordinaten.' });
+        }
+
+        if (reqDestCoords && !isValidCoord(reqDestCoords)) {
+            clearRouteTimer();
+            return res.status(400).json({ success: false, message: 'Ungültige Zielkoordinaten.' });
+        }
+
+        if (arrivalTime) {
+            const parsedDate = new Date(arrivalTime);
+            if (isNaN(parsedDate.getTime())) {
+                clearRouteTimer();
+                return res.status(400).json({ success: false, message: 'Ungültiges Datum oder ungültige Uhrzeit.' });
+            }
+        }
+
+        const VALID_MODES = ['train', 'bus', 'cycling', 'bicycle', 'transit'];
+        if (transportMode && !VALID_MODES.includes(transportMode)) {
+            clearRouteTimer();
+            return res.status(400).json({ success: false, message: `Ungültiger Transportmodus. Unterstützt: ${VALID_MODES.join(', ')}.` });
+        }
+
+        if (maxTimeMinutes !== undefined && (typeof maxTimeMinutes !== 'number' || maxTimeMinutes <= 0 || maxTimeMinutes > 1440)) {
+            clearRouteTimer();
+            return res.status(400).json({ success: false, message: 'Ungültiger Zeitbereich (1–1440 Minuten).' });
+        }
+
         // Try HAFAS (with timeout) but fall back to estimated data if unavailable
         let hafasAvailable = false;
         let client = null;

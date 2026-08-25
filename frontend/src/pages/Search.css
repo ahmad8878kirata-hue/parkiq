@@ -36,6 +36,14 @@
   border-color: var(--primary-light);
   box-shadow: 0 4px 12px rgba(244, 63, 94, 0.1);
 }
+.dest-error {
+  color: #ef4444;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: -0.5rem;
+  margin-bottom: 0.75rem;
+  padding-left: 0.25rem;
+}
 .search-input::placeholder {
   color: var(--text-muted);
   font-weight: 500;

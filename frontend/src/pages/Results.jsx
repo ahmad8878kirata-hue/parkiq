@@ -1,12 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 const FETCH_TIMEOUT = 70000; // 70s
 import { useParking } from '../context/ParkingContext';
-import { ArrowLeft, MapPin, Car, PersonSimpleWalk, Train, Bus, Bicycle, CircleNotch, CaretLeft, Envelope, WarningCircle, Ticket, Check } from '@phosphor-icons/react';
+import { ArrowLeft, MapPin, Car, PersonSimpleWalk, Train, Bus, Bicycle, CircleNotch, CaretLeft, WarningCircle, Ticket, Check } from '@phosphor-icons/react';
 import L from 'leaflet';
+import { API_BASE } from '../config';
 import './Results.css';
-
-const API_BASE = 'http://localhost:5000';
 
 const DEFAULT_HOURLY_RATE = '2 €/Std.';
 
@@ -14,6 +13,20 @@ const formatEuro = (val) => {
     const n = parseFloat(val);
     if (isNaN(n)) return val;
     return n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+};
+
+const computeDepartureTime = (arrivalTime, totalMin) => {
+    if (!arrivalTime || !totalMin) return null;
+    const arr = new Date(arrivalTime);
+    const mins = parseInt(String(totalMin).replace(/\D/g, ''), 10);
+    if (isNaN(mins)) return null;
+    const dep = new Date(arr.getTime() - mins * 60000);
+    return dep.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+};
+
+const formatIsoTime = (iso) => {
+    if (!iso) return '';
+    return new Date(iso).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 };
 
 function getParkingDisplayPricing(opt) {
@@ -641,7 +654,7 @@ const Results = () => {
                                             </div>
                                             <div className="option-details">
                                                 <div className="flex-between text-sm text-muted">
-                                                    <div>{opt.totalTime}</div>
+                                                    <div>{computeDepartureTime(arrivalTime, opt.totalTime) && arrivalTime ? `${computeDepartureTime(arrivalTime, opt.totalTime)} – ${formatIsoTime(arrivalTime)}` : opt.totalTime}</div>
                                                     {!displayPrice.isFree && !dauerparkFree && <div>{formatEuro(opt.savings)} sparen</div>}
                                                     {transitFree && <div className="text-success">Job-Ticket aktiv</div>}
                                                     {dauerparkFree && <div className="text-success">Dauerparkticket: Station</div>}
@@ -689,6 +702,11 @@ const Results = () => {
                                             </div>
                                         )}
                                         <h3 className="text-center font-bold text-xl">{routeData.totalTime} Gesamtdauer</h3>
+                                        {routeData.timeline && routeData.timeline.length >= 2 && (
+                                            <p className="text-center text-sm mb-4" style={{ fontWeight: 600, color: 'var(--text-main)' }}>
+                                                {routeData.timeline[0].time} &ndash; {routeData.timeline[routeData.timeline.length - 1].time}
+                                            </p>
+                                        )}
                                         <p className="text-center text-muted text-sm mb-4">{isDirectTransit ? destination : `${selectedParking?.parkingName} — ${MODE_NAME_DE[selectedMode] || selectedMode}`}</p>
                                         {hasJobTicket && (
                                             <div className="text-center mb-2">

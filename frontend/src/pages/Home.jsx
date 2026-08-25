@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useParking } from '../context/ParkingContext';
-import { List, Car, CaretRight, House, Briefcase, Barbell, FirstAid, MagnifyingGlass, Microphone, X, MapPin, NavigationArrow, ChargingStation, DotsThreeVertical, Pencil, CalendarBlank, CaretLeft, Ticket, WarningCircle } from '@phosphor-icons/react';
+import { Car, CaretRight, MagnifyingGlass, X, MapPin, NavigationArrow, ChargingStation, DotsThreeVertical, Pencil, Ticket, WarningCircle } from '@phosphor-icons/react';
 import L from 'leaflet';
 import './Home.css';
 import './Search.css';
 import './Selection.css';
-import '../components/AutocompleteInput.css';
-import AutocompleteInput from '../components/AutocompleteInput';
-
-const API_BASE = 'http://localhost:5000';
+import RouteSearchForm from '../components/RouteSearchForm';
+import { resolveCoords, buildArrivalISO } from '../services/geocodingService';
+import { API_BASE } from '../config';
 
 const Home = () => {
     const navigate = useNavigate();
@@ -29,26 +28,12 @@ const Home = () => {
     const [editingLocation, setEditingLocation] = useState(false);
     const isPickingLocationRef = useRef(false);
     const [startCoords, setStartCoords] = useState([48.7758, 9.1829]);
-    const startCoordsRef = useRef(startCoords);
-    const startAutocompleteRef = useRef(false);
-    const destAutocompleteRef = useRef(false);
     const [destCoords, setDestCoords] = useState(null);
     const [destStatus, setDestStatus] = useState('');
     const destMarkerRef = useRef(null);
-    const [customLocation, setCustomLocation] = useState('');
     const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
     const [profileModalOpen, setProfileModalOpen] = useState(false);
     const [showSearchSheet, setShowSearchSheet] = useState(false);
-    const [searchStartLocation, setSearchStartLocation] = useState('');
-    const [searchDestination, setSearchDestination] = useState('');
-    const today = new Date();
-    const [searchActiveDay, setSearchActiveDay] = useState(today.getDate());
-    const [searchMonth, setSearchMonth] = useState(today.getMonth());
-    const [searchYear, setSearchYear] = useState(today.getFullYear());
-    const [searchTime, setSearchTime] = useState(`${today.getHours().toString().padStart(2, '0')}:${today.getMinutes().toString().padStart(2, '0')}`);
-    const [searchTimeConfirmed, setSearchTimeConfirmed] = useState(false);
-    const [searchShowDate, setSearchShowDate] = useState(false);
-    const [isDeparture, setIsDeparture] = useState(true);
     const [loadingLocation, setLoadingLocation] = useState(false);
     const [stationInput, setStationInput] = useState('');
 
@@ -68,138 +53,42 @@ const Home = () => {
         }
     };
 
-    const handleSelectParking = (lot) => {
-        setSelectedParking(lot);
-        setSheetExpanded(true);
-        mapInstance.current?.setView(lot.coordinates, 15, { animate: true });
-    };
-
-    const handleLocationSubmit = async () => {
-        setEditingLocation(false);
-        if (!customLocation) return;
-
-        try {
-            const res = await fetch(`${API_BASE}/api/geocode/search?format=json&q=${encodeURIComponent(customLocation)}`);
-            const data = await res.json();
-            if (data && data.length > 0) {
-                const lat = parseFloat(data[0].lat);
-                const lon = parseFloat(data[0].lon);
-                mapInstance.current?.setView([lat, lon], 14, { animate: true });
-                markerInstance.current?.setLatLng([lat, lon]);
-                setLocationStatus(data[0].display_name.split(',')[0]);
-            } else {
-                alert("Standort nicht gefunden");
-            }
-        } catch (e) {
-            console.error('Failed to geocode location:', e);
-        }
-    };
-
-    const searchMonthNames = ['Jan', 'Feb', 'Mär', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'];
-    const searchFullMonthNames = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
-
-    const searchDaysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
-    const searchFirstDayOfMonth = (y, m) => new Date(y, m, 1).getDay();
-
-    const searchPrevMonth = () => {
-        if (searchMonth === 0) { setSearchMonth(11); setSearchYear(y => y - 1); }
-        else setSearchMonth(m => m - 1);
-    };
-    const searchNextMonth = () => {
-        if (searchMonth === 11) { setSearchMonth(0); setSearchYear(y => y + 1); }
-        else setSearchMonth(m => m + 1);
-    };
-
-    const searchIsPastDay = (day) => {
-        const d = new Date(searchYear, searchMonth, day);
-        const now = new Date();
-        now.setHours(0, 0, 0, 0);
-        return d < now;
-    };
-
-    const searchRenderDays = () => {
-        const days = [];
-        const dim = searchDaysInMonth(searchYear, searchMonth);
-        const fdow = searchFirstDayOfMonth(searchYear, searchMonth);
-        const prevDim = searchDaysInMonth(searchYear, searchMonth - 1 < 0 ? 11 : searchMonth - 1);
-
-        // prev month trailing days
-        for (let i = fdow === 0 ? 6 : fdow - 1; i > 0; i--) {
-            days.push(<div key={`prev-${i}`} className="day disabled">{prevDim - i + 1}</div>);
-        }
-        // current month days
-        for (let i = 1; i <= dim; i++) {
-            const past = searchIsPastDay(i);
-            days.push(
-                <div
-                    key={`curr-${i}`}
-                    className={`day ${past ? 'disabled' : ''} ${searchActiveDay === i ? 'active' : ''}`}
-                    onClick={() => { if (!past) { setSearchActiveDay(i); setSearchTimeConfirmed(false); } }}
-                >
-                    {i.toString().padStart(2, '0')}
-                </div>
-            );
-        }
-        return days;
-    };
-
-    const handleSearchAccept = async () => {
+    const handleSearchSubmit = async (form) => {
         setLoadingLocation(true);
-        let finalStartCoords = startCoords;
-        let finalDestName = searchDestination;
-        let finalStartName = searchStartLocation;
-        let finalDestCoords = destCoords;
-
-        // Use autocomplete-selected coordinates if available
-        if (startAutocompleteRef.current) {
-            finalStartCoords = startCoords;
-            finalStartName = searchStartLocation;
-        }
-        if (destAutocompleteRef.current) {
-            finalDestCoords = destCoords;
-            finalDestName = searchDestination;
-        }
-
+        form.setDestError('');
         try {
-            if (!finalDestCoords) {
-                const destRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(searchDestination)}&limit=1`);
-                const destData = await destRes.json();
-                if (destData.features && destData.features.length > 0) {
-                    finalDestName = destData.features[0].properties.name || searchDestination;
-                    finalDestCoords = [destData.features[0].geometry.coordinates[1], destData.features[0].geometry.coordinates[0]];
-                }
+            const result = await resolveCoords({
+                startLocation: form.startLocation,
+                startCoords: form.startCoords,
+                startFromAutocomplete: form.startFromAutocomplete,
+                destination: form.destination,
+                destCoords: form.destCoords,
+                destFromAutocomplete: form.destFromAutocomplete,
+                currentLocationStatus: locationStatus,
+            });
+
+            if (!result.destCoords) {
+                setLoadingLocation(false);
+                form.setDestError('Ungültiger Ort. Bitte geben Sie einen gültigen Ort ein.');
+                return;
             }
 
-            if (!startAutocompleteRef.current && searchStartLocation && searchStartLocation !== 'Baden-Württemberg' && searchStartLocation !== 'Your Location') {
-                if (searchStartLocation === locationStatus || searchStartLocation === 'My Location') {
-                    finalStartCoords = startCoordsRef.current;
-                    finalStartName = locationStatus || searchStartLocation;
-                } else {
-                    const startRes = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(searchStartLocation)}&limit=1`);
-                    const startData = await startRes.json();
-                    if (startData.features && startData.features.length > 0) {
-                        finalStartCoords = [startData.features[0].geometry.coordinates[1], startData.features[0].geometry.coordinates[0]];
-                        finalStartName = startData.features[0].properties.name || searchStartLocation;
-                    }
+            const arrivalTime = buildArrivalISO(form.year, form.month, form.activeDay, form.time);
+            setShowSearchSheet(false);
+            navigate('/results', {
+                state: {
+                    destination: result.destName,
+                    startLocation: result.startName,
+                    startCoords: result.startCoords,
+                    destCoords: result.destCoords,
+                    arrivalTime,
+                    parkingId: selectedParking?.id
                 }
-            }
+            });
         } catch (e) {
             console.error("Geocoding failed:", e);
+            setLoadingLocation(false);
         }
-
-        const dateStr = `${searchYear}-${(searchMonth + 1).toString().padStart(2, '0')}-${searchActiveDay.toString().padStart(2, '0')}T${searchTime}:00`;
-        const arrivalTime = new Date(dateStr).toISOString();
-        setShowSearchSheet(false);
-        navigate('/results', {
-            state: {
-                destination: finalDestName,
-                startLocation: finalStartName,
-                startCoords: finalStartCoords,
-                destCoords: finalDestCoords,
-                arrivalTime,
-                parkingId: selectedParking?.id
-            }
-        });
     };
 
     useEffect(() => {
@@ -374,9 +263,6 @@ const Home = () => {
         );
     }, [locationEnabled]);
 
-    // Keep ref in sync with startCoords for use in async callbacks
-    useEffect(() => { startCoordsRef.current = startCoords; }, [startCoords]);
-
     // Update map tiles when dark mode changes
     useEffect(() => {
         if (tileLayerRef.current) {
@@ -456,9 +342,9 @@ const Home = () => {
             </div>
 
             <div className="top-park-btn-container" style={{ position: 'absolute', top: '5rem', right: '1rem', zIndex: 20 }}>
-                <button className="btn btn-primary shadow-glow" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }} style={{ padding: '0.6rem 1.2rem', borderRadius: '1.5rem 1.5rem 1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.875rem', fontWeight: '600' }}>
+                <button className="btn btn-primary shadow-glow" onClick={() => { setShowSearchSheet(true); }} style={{ padding: '0.6rem 1.2rem', borderRadius: '1.5rem 1.5rem 1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.875rem', fontWeight: '600' }}>
                     <span>Park & Ride</span>
-                    <CaretRight weight="bold" />
+                    <CaretRight weight="bold" size={28} />
                 </button>
                 {destCoords && (
                     <div style={{ fontSize: '0.65rem', color: 'var(--primary)', marginTop: '0.25rem', textAlign: 'right', fontWeight: 500, background: 'rgba(244,63,94,0.1)', borderRadius: '0.5rem', padding: '0.2rem 0.5rem' }}>
@@ -507,7 +393,7 @@ const Home = () => {
                                     </div>
                                 )}
                             </div>
-                            <button className="btn btn-primary w-100 mt-2" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
+                            <button className="btn btn-primary w-100 mt-2" onClick={() => { setShowSearchSheet(true); }}>
                                 <NavigationArrow weight="bold" className="mr-2" /> Route ab hier
                             </button>
                         </div>
@@ -516,7 +402,7 @@ const Home = () => {
             )}
 
             <div className="bottom-controls">
-                <div className="search-container" onClick={() => { setSearchStartLocation(locationStatus || ''); setSearchDestination(destStatus || ''); setShowSearchSheet(true); }}>
+                <div className="search-container" onClick={() => { setShowSearchSheet(true); }}>
                     <MagnifyingGlass weight="bold" className="search-icon" />
                     <div className="search-text">{destStatus ? destStatus : 'Auf Karte tippen, um Ziel festzulegen'}</div>
                     <button className="mic-btn" onClick={(e) => {
@@ -534,125 +420,22 @@ const Home = () => {
                 <div className="search-sheet-overlay visible" onClick={() => setShowSearchSheet(false)}>
                     <div className="search-sheet" onClick={e => e.stopPropagation()}>
                         <div className="sheet-header">
-                            <h3>Hinfahrt</h3>
+                            <h3>Route</h3>
                             <button className="icon-btn close-btn" onClick={() => setShowSearchSheet(false)}>
                                 <X weight="bold" />
                             </button>
                         </div>
 
-                        <div className="mb-4">
-                            <AutocompleteInput
-                                placeholder="Startpunkt (z. B. Stuttgart Hbf)"
-                                value={searchStartLocation}
-                                onChange={(e) => setSearchStartLocation(e.target.value)}
-                                onSelect={(data) => {
-                                    setStartCoords(data.coordinates);
-                                    setSearchStartLocation(data.name);
-                                    startAutocompleteRef.current = true;
-                                }}
-                                className="search-input"
-                            />
-                            <AutocompleteInput
-                                placeholder="Wohin möchten Sie? (PLZ eingeben)"
-                                value={searchDestination}
-                                onChange={(e) => setSearchDestination(e.target.value)}
-                                onSelect={(data) => {
-                                    setDestCoords(data.coordinates);
-                                    setSearchDestination(data.name);
-                                    setDestStatus(data.road || data.name.split(',')[0] || data.name);
-                                    destAutocompleteRef.current = true;
-                                }}
-                                autoFocus
-                                className="search-input search-input-dest"
-                            />
-                        </div>
-
-                        {!searchShowDate ? (
-                            <>
-                                {searchTimeConfirmed ? (
-                                    <div className="time-confirmed-badge">
-                                        <span className="time-confirmed-label">
-                                            {searchActiveDay === today.getDate() && searchMonth === today.getMonth() && searchYear === today.getFullYear()
-                                                ? `Heute, ${searchTime}`
-                                                : `${searchFullMonthNames[searchMonth].slice(0, 3)} ${searchActiveDay}, ${searchTime}`}
-                                        </span>
-                                        <button className="time-edit-btn" onClick={() => { setSearchTimeConfirmed(false); setSearchShowDate(true); }}>
-                                            <Pencil weight="bold" size={14} />
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <button
-                                        className="btn btn-outline date-btn"
-                                        onClick={() => setSearchShowDate(true)}
-                                    >
-                                        <CalendarBlank weight="bold" size={18} />
-                                        <span>Datum & Uhrzeit festlegen</span>
-                                        <span className="date-btn-value">{searchFullMonthNames[searchMonth].slice(0, 3)} {searchActiveDay}, {searchTime}</span>
-                                    </button>
-                                )}
-                            </>
-                        ) : (
-                            <>
-                                <div className="dt-close-row">
-                                    <button className="icon-btn close-btn" onClick={() => setSearchShowDate(false)}>
-                                        <X weight="bold" />
-                                    </button>
-                                </div>
-                                <div className="datetime-content">
-                                    <div className="calendar-header">
-                                        <button className="icon-btn text-muted" onClick={searchPrevMonth}>
-                                            <CaretLeft weight="bold" /> {searchMonth === 0 ? searchMonthNames[11] : searchMonthNames[searchMonth - 1]}
-                                        </button>
-                                        <span className="current-month">{searchFullMonthNames[searchMonth]} {searchYear}</span>
-                                        <button className="icon-btn text-muted" onClick={searchNextMonth}>
-                                            {searchMonth === 11 ? searchMonthNames[0] : searchMonthNames[searchMonth + 1]} <CaretRight weight="bold" />
-                                        </button>
-                                    </div>
-
-                                    <div className="calendar-grid">
-                                        <div className="day-name">Mo</div><div className="day-name">Tu</div><div className="day-name">We</div><div className="day-name">Th</div><div className="day-name">Fr</div><div className="day-name">Sa</div><div className="day-name">Su</div>
-                                        {searchRenderDays()}
-                                    </div>
-
-                                    <div className="time-picker mb-4">
-                                        <input
-                                            type="time"
-                                            value={searchTime}
-                                            onChange={(e) => { setSearchTime(e.target.value); setSearchTimeConfirmed(false); }}
-                                            className="time-input"
-                                            step="60"
-                                        />
-                                        <span className="time-display">{searchTime}</span>
-                                        <button className="btn btn-outline ml-auto now-btn" onClick={() => {
-                                            const now = new Date();
-                                            setSearchTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
-                                            setSearchActiveDay(now.getDate());
-                                            setSearchTimeConfirmed(false);
-                                        }}>Jetzt</button>
-                                    </div>
-                                    <button className="btn btn-primary w-100 set-date-btn" onClick={() => { setSearchShowDate(false); setSearchTimeConfirmed(true); }}>
-                                        <span style={{ marginRight: '0.4rem' }}>✔</span> Speichern
-                                    </button>
-                                </div>
-                            </>
-                        )}
-
-                        {selectedParking && (
-                            <div className="selected-parking-chip">
-                                <MapPin weight="fill" className="text-primary" />
-                                <span>{selectedParking.name}</span>
-                                <button className="chip-remove" onClick={() => { setSelectedParking(null); setShowSearchSheet(false); }}><X weight="bold" /></button>
-                            </div>
-                        )}
-                        {!searchShowDate && (
-                            <button
-                                className="btn btn-primary btn-large w-100"
-                                onClick={handleSearchAccept}
-                                disabled={loadingLocation}
-                            >
-                                {loadingLocation ? 'Bestes Ergebnis wird ermittelt...' : 'Beste PBW-Route finden'}
-                            </button>
-                        )}
+                        <RouteSearchForm
+                            initialStartLocation={locationStatus || ''}
+                            initialStartCoords={startCoords}
+                            initialDestination={destStatus || ''}
+                            initialDestCoords={destCoords}
+                            selectedParking={selectedParking}
+                            onRemoveParking={() => { setSelectedParking(null); setShowSearchSheet(false); }}
+                            onSubmit={handleSearchSubmit}
+                            loading={loadingLocation}
+                        />
                     </div>
                 </div>
             )}

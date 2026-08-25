@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useParking } from '../context/ParkingContext';
-import { MapPinLine, Train, Car, Coins, Lightning, ClockCountdown, PiggyBank, Leaf, Cloud, Sneaker, MapPin, ArrowRight } from '@phosphor-icons/react';
+import { Train, Car, Coins, Lightning, ClockCountdown, PiggyBank, Leaf, Cloud, Sneaker, MapPin, ArrowRight } from '@phosphor-icons/react';
 import './Onboarding.css';
 
 const Onboarding = () => {
