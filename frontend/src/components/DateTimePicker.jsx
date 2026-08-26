@@ -100,7 +100,7 @@ const DateTimePicker = ({
                         </div>
 
                         <div className="calendar-grid">
-                            <div className="day-name">Mo</div><div className="day-name">Tu</div><div className="day-name">We</div><div className="day-name">Th</div><div className="day-name">Fr</div><div className="day-name">Sa</div><div className="day-name">Su</div>
+                            <div className="day-name">Mo</div><div className="day-name">Di</div><div className="day-name">Mi</div><div className="day-name">Do</div><div className="day-name">Fr</div><div className="day-name">Sa</div><div className="day-name">So</div>
                             {renderDays()}
                         </div>
 
