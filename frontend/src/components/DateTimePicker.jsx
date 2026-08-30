@@ -105,14 +105,16 @@ const DateTimePicker = ({
                         </div>
 
                         <div className="time-picker mb-4">
+                            <label className="time-label" htmlFor="departure-time-input">Abfahrtszeit</label>
                             <input
+                                id="departure-time-input"
                                 type="time"
                                 value={time}
                                 onChange={(e) => setTime(e.target.value)}
                                 className="time-input"
                                 step="60"
                             />
-                            <span className="time-display">{time}</span>
+                            <span className="time-unit">Uhr</span>
                             <button className="btn btn-outline ml-auto now-btn" onClick={() => {
                                 const now = new Date();
                                 setTime(`${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);

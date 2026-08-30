@@ -50,6 +50,14 @@ function formatParkingType(type) {
     return typeMap[(type || '').toUpperCase()] || null;
 }
 
+function pbwDetailUrl(publicUrl) {
+    const url = (publicUrl || '').trim();
+    if (!url) return null;
+    if (/^https?:\/\/www\.pbw\.de\/parken\/detail\/\d+/.test(url)) return url;
+    const m = url.match(/[?&]search=\*(\d+)(?:&|$)/);
+    return m ? `https://www.pbw.de/parken/detail/${m[1]}` : null;
+}
+
 function enhanceParkingName(rawName, address, siteType, description, capacity) {
     const name = (rawName || '').trim();
     const addr = (address || '').trim();
@@ -80,6 +88,15 @@ function transformSite(site) {
     const lat = parseFloat(site.lat);
     const lon = parseFloat(site.lon);
     const address = site.address || '';
+    const hasRealtime = !!site.has_realtime_data;
+    const freeSpaces = hasRealtime && site.realtime_free_capacity != null ? site.realtime_free_capacity : null;
+    const occupancyRate = (hasRealtime && capacity > 0 && freeSpaces != null)
+        ? Math.round(((capacity - freeSpaces) / capacity) * 100)
+        : null;
+    let status = 'available';
+    if (!hasRealtime || freeSpaces == null) status = 'unknown';
+    else if (freeSpaces <= 0) status = 'full';
+    else if (freeSpaces < capacity) status = 'occupied';
     return {
         id: site.id,
         name: enhanceParkingName(site.name, address, site.type, site.description, capacity),
@@ -87,10 +104,11 @@ function transformSite(site) {
         operator: site.operator_name || null,
         coordinates: [lat, lon],
         address,
+        websiteUrl: pbwDetailUrl(site.public_url),
         parkingType: site.type || null,
         totalCapacity: capacity,
-        freeSpaces: capacity,
-        occupancyRate: 0,
+        freeSpaces,
+        occupancyRate,
         hasRealtime: !!site.has_realtime_data,
         hasFee: site.has_fee,
         feeDescription: site.fee_description || null,
@@ -99,7 +117,7 @@ function transformSite(site) {
             evCharging: (site.capacity_charging || 0) > 0,
             maxHeight: site.max_height || null
         },
-        status: 'available'
+        status
     };
 }
 
@@ -243,6 +261,130 @@ const BW_CITIES = [
     { name: 'Heilbronn', lat: 49.1427, lon: 9.2109, radius: 20000 },
     { name: 'Pforzheim', lat: 48.8910, lon: 8.6946, radius: 15000 }
 ];
+
+// Determine the approximate city for a coordinate pair (nearest known BW city,
+// Stuttgart by default). Used to display the city beneath transit stop names.
+function cityForCoords(lat, lon) {
+    let bestCity = 'Stuttgart';
+    let bestDist = Infinity;
+    for (const c of BW_CITIES) {
+        const d = distanceMeters([lat, lon], [c.lat, c.lon]);
+        if (d < bestDist) { bestDist = d; bestCity = c.name; }
+    }
+    return bestCity;
+}
+
+// Normalize a journey's legs into a list of real "rides" (transit legs only),
+// aligned so that the first ride departs at the given anchor date. Walking legs
+// within the journey are ignored for the ride list but their duration is kept
+// implicitly in the raw leg times. Every ride except the last one exposes the
+// transfer stop and the waiting time until the next ride.
+function buildTransitRides(legInfos, anchorDate) {
+    const toMs = (iso) => (iso ? new Date(iso).getTime() : null);
+    const raw = (legInfos || []).filter(l => l && l.mode && l.mode !== 'walking');
+    if (raw.length === 0) return [];
+    const firstDepMs = toMs(raw[0].departure);
+    let offset = 0;
+    if (firstDepMs != null && anchorDate) {
+        const anchor = new Date(anchorDate);
+        if (!isNaN(anchor.getTime())) offset = anchor.getTime() - firstDepMs;
+    }
+    const rides = raw.map((l) => {
+        const depMs = toMs(l.departure);
+        const arrMs = toMs(l.arrival);
+        const dep = depMs != null ? new Date(depMs + offset) : null;
+        const arr = arrMs != null ? new Date(arrMs + offset) : null;
+        const durationMin = dep && arr ? Math.max(1, Math.round((arr - dep) / 60000)) : 0;
+        const legMode = String(l.mode || '').toLowerCase();
+        return {
+            lineName: l.line ? String(l.line) : (legMode === 'bus' ? 'Bus' : 'Zug'),
+            lineNumber: l.lineNumber || '',
+            direction: l.direction || '',
+            mode: legMode,
+            from: l.origin || 'Haltestelle',
+            to: l.destination || '',
+            departure: dep ? dep.toISOString() : null,
+            plannedDeparture: l.plannedDeparture || null,
+            departureDelay: l.departureDelay != null ? l.departureDelay : null,
+            arrival: arr ? arr.toISOString() : null,
+            plannedArrival: l.plannedArrival || null,
+            arrivalDelay: l.arrivalDelay != null ? l.arrivalDelay : null,
+            platform: l.platform || null,
+            plannedPlatform: l.plannedPlatform || null,
+            cancelled: !!l.cancelled,
+            durationMin
+        };
+    });
+    // Waiting times between consecutive rides (at the transfer stop).
+    for (let i = 0; i < rides.length - 1; i++) {
+        const cur = rides[i];
+        const nxt = rides[i + 1];
+        const arrMs = toMs(cur.arrival);
+        const depMs = toMs(nxt.departure);
+        if (arrMs != null && depMs != null) {
+            cur.transferWaitMin = Math.max(0, Math.round((depMs - arrMs) / 60000));
+            cur.transferStop = cur.to;
+        } else {
+            cur.transferWaitMin = 0;
+            cur.transferStop = cur.to;
+        }
+    }
+    return rides;
+}
+
+// Append one timeline entry per ride plus a transfer entry after every ride that
+// requires changing trains/buses. Falls back to a single clearly-marked
+// "estimated" entry when no real rides are available.
+function appendTransitTimeline(timeline, rides, timeFormatter, firstCity, lastCity, estimatedFallback) {
+    if (!rides || rides.length === 0) {
+        if (estimatedFallback) {
+            timeline.push({
+                time: timeFormatter.format(new Date(estimatedFallback.transitDep)),
+                mode: estimatedFallback.mode,
+                name: estimatedFallback.stopName,
+                city: firstCity || '',
+                arrivalStop: { name: estimatedFallback.destStopName, city: lastCity || '' },
+                details: 'Verbindung geschätzt – Echtzeit-Fahrplandaten sind aktuell nicht verfügbar.',
+                durationMin: estimatedFallback.transitMin,
+                estimated: true
+            });
+        }
+        return;
+    }
+    rides.forEach((ride, i) => {
+        const fromCity = i === 0 ? firstCity || '' : '';
+        const toCity = i === rides.length - 1 ? lastCity || '' : '';
+        const mode = ride.mode === 'bus' ? 'bus' : 'train';
+        const lineLabel = ride.lineName && ride.lineNumber ? `${ride.lineName} ${ride.lineNumber}` : (ride.lineName || 'Zug');
+        const directionText = ride.direction ? ` Richtung ${ride.direction}` : '';
+        timeline.push({
+            time: ride.departure ? timeFormatter.format(new Date(ride.departure)) : '',
+            mode,
+            name: ride.from,
+            city: fromCity,
+            lineName: lineLabel,
+            arrivalStop: { name: ride.to, city: toCity },
+            details: ride.cancelled
+                ? `${lineLabel}${directionText} → ${ride.to} – Zug ausgefallen`
+                : `${lineLabel}${directionText} → ${ride.to} · ${ride.durationMin} Min.`,
+            durationMin: ride.durationMin,
+            delay: ride.departureDelay,
+            arrivalDelay: ride.arrivalDelay,
+            cancelled: ride.cancelled
+        });
+        if (ride.transferStop != null && i < rides.length - 1) {
+            timeline.push({
+                time: ride.arrival ? timeFormatter.format(new Date(ride.arrival)) : '',
+                mode: 'transfer',
+                name: ride.transferStop,
+                city: toCity,
+                details: `Umsteigen · Wartezeit ${ride.transferWaitMin} Min.`,
+                durationMin: ride.transferWaitMin,
+                transferWaitMin: ride.transferWaitMin
+            });
+        }
+    });
+}
 
 async function fetchAndCacheParking() {
     let allSites = [];
@@ -461,6 +603,15 @@ function distanceMeters([lat1, lon1], [lat2, lon2]) {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function isParkingDestination(parkCoords, destCoords, parkName, destName) {
+    if (!parkCoords || !destCoords) return false;
+    if (distanceMeters(parkCoords, destCoords) < 150) return true;
+    const norm = (s) => (s || '').toLowerCase().replace(/[^a-zäöüß0-9]/gi, '');
+    const a = norm(parkName);
+    const b = norm(destName);
+    return a.length >= 3 && b.length >= 3 && (a === b || a.includes(b) || b.includes(a));
+}
+
 function pathLengthMeters(path) {
     let total = 0;
     for (let i = 1; i < path.length; i++) total += distanceMeters(path[i - 1], path[i]);
@@ -500,6 +651,138 @@ function estimateParkingPrice(name) {
     if (n.includes('parkhaus') || n.includes('garage') || n.includes('tiefgarage')) return 4.50;
     if (n.includes('p+r') || n.includes('pr') || n.includes('p-r')) return 3.00;
     return 3.50;
+}
+
+// Human-readable occupancy status based on realtime data availability.
+function occupancyStatus(park) {
+    if (!park.hasRealtime || park.freeSpaces == null || park.totalCapacity == null) return 'unknown';
+    if (park.freeSpaces <= 0) return 'full';
+    if (park.freeSpaces < park.totalCapacity) return 'occupied';
+    return 'available';
+}
+
+// ====== PBW website pricing (official rates) ======
+const pbwPriceCache = new Map();
+const PBW_PRICE_CACHE_MAX = 400;
+
+// Extract tariff lines (strings containing an amount) from a PBW detail page.
+function parsePbwTariffLines(html) {
+    const out = [];
+    if (!html) return out;
+    const amountRe = /\d+[.,]\d{2}\s*(€|EUR)/i;
+    const rawChunks = html.split(/<br\s*\/?\s*>/i);
+    for (const raw of rawChunks) {
+        let text = raw
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/\s+/g, ' ')
+            .trim();
+        if (!text) continue;
+        // The myPBW login disclaimer is often glued to the tariff sentence.
+        // Keep only the part that actually lists the tariff.
+        if (/Der\s+Tarif\s+wird\s+nur\s+angezeigt/i.test(text)) {
+            const idx = text.search(/Tarife\s+für\s+Kurzzeitparker|1?\.?\s*angefangene|Jede\s+weitere|je\s+angefangene|entspricht/i);
+            text = idx >= 0 ? text.slice(idx) : '';
+            text = text.replace(/Tarife\s+für\s+Kurzzeitparker\s*/i, '').trim();
+        }
+        if (!text) continue;
+        if (amountRe.test(text)) out.push(text);
+    }
+    return out;
+}
+
+// Tariff lines that are fees or subscriptions, not the regular parking rate,
+// and therefore should not be used as the primary hourly/daily base.
+const PBW_FEE_LINE_RE = /(Startgebühr|Blockiergebühr|Ladetarif|kWh|monatlich|Monat|Entgelt|Originalrad|Radschloss|Lademodus|Ladepreis|Service|Gebühr)/i;
+
+// Build a structured pricing object from parsed tariff lines.
+function aggregatePricing(lines, rawHasFee) {
+    // Drop disclaimer noise (myPBW login notices) that happen to contain amounts.
+    const clean = (lines || []).filter(l => !/nur angezeigt|E-Maillegitimation|Login-Bereich|mypbw/i.test(l));
+
+    const isFree = rawHasFee === false;
+    if (isFree) {
+        return { isFree: true, displayPrice: 'Kostenlos', priceDetail: clean, numericPrice: 0, tariffType: 'free', hasFee: false };
+    }
+
+    const amountOf = (line) => {
+        const m = line.match(/(\d+[.,]\d{2})\s*(€|EUR)/i);
+        return m ? parseFloat(m[1].replace(',', '.')) : null;
+    };
+    // Candidates for the base car-parking rate (skip fees/subscriptions).
+    const rateLines = clean.filter(l => !PBW_FEE_LINE_RE.test(l));
+
+    let hourlyAmount = null;
+    let dailyAmount = null;
+    let otherLine = null;
+    const pool = rateLines.length > 0 ? rateLines : clean;
+    for (const l of pool) {
+        if (/(Minuten?\s|Stunde|Std\.|angefangene)/i.test(l)) { hourlyAmount = hourlyAmount ?? amountOf(l); }
+        else if (/(Tageshöchst|höchstsatz|Tag)/i.test(l)) { dailyAmount = dailyAmount ?? amountOf(l); }
+        if (!otherLine && amountOf(l) != null) otherLine = l;
+    }
+    if (pool === clean) {
+        // No clear rate lines; re-check without the exclusion to still get something.
+        for (const l of clean) {
+            if (/(Minuten?\s|Stunde|Std\.|angefangene)/i.test(l)) { hourlyAmount = hourlyAmount ?? amountOf(l); }
+            else if (/(Tageshöchst|höchstsatz|Tag)/i.test(l)) { dailyAmount = dailyAmount ?? amountOf(l); }
+        }
+    }
+
+    const fmt = (n) => n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    let displayPrice, numericPrice, tariffType;
+    if (hourlyAmount != null && isFinite(hourlyAmount)) {
+        numericPrice = hourlyAmount;
+        tariffType = 'hourly';
+        displayPrice = dailyAmount != null && isFinite(dailyAmount) && isFinite(hourlyAmount)
+            ? `${fmt(hourlyAmount)} €/Std. · ${fmt(dailyAmount)} €/Tag`
+            : `${fmt(hourlyAmount)} €/Std.`;
+    } else if (dailyAmount != null && isFinite(dailyAmount)) {
+        numericPrice = dailyAmount;
+        tariffType = 'daily';
+        displayPrice = `${fmt(dailyAmount)} €/Tag`;
+    } else if (otherLine) {
+        displayPrice = otherLine;
+        numericPrice = amountOf(otherLine);
+        tariffType = 'other';
+    } else {
+        displayPrice = DEFAULT_HOURLY_RATE;
+        numericPrice = DEFAULT_PARKING_PRICE;
+        tariffType = 'hourly';
+    }
+    return { isFree: false, displayPrice, priceDetail: clean, numericPrice, tariffType, hasFee: true };
+}
+
+// Fetch and cache the official price of a parking site from its PBW page.
+async function fetchPbwPricing(park) {
+    const key = park.id != null ? `id:${park.id}` : (park.websiteUrl || '');
+    if (pbwPriceCache.has(key)) return pbwPriceCache.get(key);
+
+    let result = null;
+    const url = park.websiteUrl || (park.id != null ? `https://www.pbw.de/parken/detail/${park.id}` : null);
+    if (url) {
+        try {
+            const res = await axios.get(url, {
+                timeout: 8000,
+                headers: { 'User-Agent': 'ParkIQ/1.0 (contact@parkiq.example.com)' }
+            });
+            const lines = parsePbwTariffLines(res.data || '');
+            result = aggregatePricing(lines, park.hasFee);
+        } catch (e) {
+            result = aggregatePricing([], park.hasFee);
+        }
+    } else {
+        result = aggregatePricing([], park.hasFee);
+    }
+
+    if (pbwPriceCache.size >= PBW_PRICE_CACHE_MAX) {
+        const first = pbwPriceCache.keys().next().value;
+        if (first) pbwPriceCache.delete(first);
+    }
+    pbwPriceCache.set(key, result);
+    return result;
 }
 
 // Estimate station coords relative to parking (toward Stuttgart center)
@@ -576,7 +859,7 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
     const key = `${from[0].toFixed(5)},${from[1].toFixed(5)}-${to[0].toFixed(5)},${to[1].toFixed(5)}-${profile}`;
     if (osrmCache.has(key)) return osrmCache.get(key);
 
-    const profileMap = { driving: 'driving', walking: 'foot', cycling: 'cycling' };
+    const profileMap = { driving: 'driving', walking: 'foot' };
     const url = `https://router.project-osrm.org/route/v1/${profileMap[profile] || 'driving'}/${from[1]},${from[0]};${to[1]},${to[0]}?geometries=geojson&overview=full&steps=false&alternatives=true`;
 
     try {
@@ -806,7 +1089,7 @@ async function findHafasStation(client, coords, nameHint) {
 }
 
 // Use DB HAFAS journeys API to get actual public transport data
-async function fetchHafasJourney(client, fromCoords, toCoords, fromName, toName, mode) {
+async function fetchHafasJourney(client, fromCoords, toCoords, fromName, toName, mode, startDate) {
     try {
         const [fromStation, toStation] = await Promise.all([
             findHafasStation(client, fromCoords, fromName),
@@ -815,29 +1098,29 @@ async function fetchHafasJourney(client, fromCoords, toCoords, fromName, toName,
         if (!fromStation || !toStation) return null;
 
         const [fromId, toId] = [fromStation.id, toStation.id];
-        return await doHafasJourney(client, fromId, toId, mode);
+        return await doHafasJourney(client, fromId, toId, mode, startDate);
     } catch (err) {
         console.error('HAFAS journey fetch failed:', err.message);
         return null;
     }
 }
 
-async function fetchHafasJourneyById(client, fromId, toId, mode) {
+async function fetchHafasJourneyById(client, fromId, toId, mode, startDate) {
     try {
-        return await doHafasJourney(client, fromId, toId, mode);
+        return await doHafasJourney(client, fromId, toId, mode, startDate);
     } catch (err) {
         console.error('HAFAS journey by ID fetch failed:', err.message);
         return null;
     }
 }
 
-async function doHafasJourney(client, fromId, toId, mode) {
+async function doHafasJourney(client, fromId, toId, mode, startDate) {
     const results = await withTimeout(
         client.journeys(fromId, toId, {
             results: 3,
             products: mode === 'bus' ? { bus: true, express: false, regional: false, suburban: false, tram: false, ferry: false } : {},
             walkingSpeed: 'normal',
-            start: new Date()
+            start: startDate ? new Date(startDate) : new Date()
         }),
         10000
     );
@@ -857,13 +1140,27 @@ async function doHafasJourney(client, fromId, toId, mode) {
         totalDuration += leg.departure && leg.arrival
             ? (new Date(leg.arrival) - new Date(leg.departure)) / 60000
             : (leg.duration || 0) / 60;
+        const cancelled = leg.cancelled === true
+            || ((leg.mode !== 'walking') && !leg.departure && leg.plannedDeparture != null);
         legInfos.push({
             line: leg.line?.name || (leg.mode === 'walking' ? 'walk' : 'transit'),
+            lineNumber: leg.line?.nr != null
+                ? String(leg.line.nr)
+                : (leg.line?.fahrtNr ? String(leg.line.fahrtNr) : ''),
+            direction: leg.direction || '',
             mode: leg.mode,
+            walking: !!leg.walking,
             origin: leg.origin?.name || '',
             destination: leg.destination?.name || '',
             departure: leg.departure,
-            arrival: leg.arrival
+            plannedDeparture: leg.plannedDeparture || null,
+            arrival: leg.arrival,
+            plannedArrival: leg.plannedArrival || null,
+            departureDelay: leg.departureDelay != null ? leg.departureDelay : null,
+            arrivalDelay: leg.arrivalDelay != null ? leg.arrivalDelay : null,
+            platform: leg.departurePlatform || null,
+            plannedPlatform: leg.plannedDeparturePlatform || null,
+            cancelled
         });
     }
     if (fullPath.length <= 1) return null;
@@ -905,7 +1202,7 @@ async function findNearestStationHafas(client, coords) {
 }
 
 // Build 4-segment route: drive → walk to stop → transit/cycle → walk to dest
-async function generateRouteWithMode(parkCoords, startCoords, destCoords, destName, transportMode, hafasClient) {
+async function generateRouteWithMode(parkCoords, startCoords, destCoords, destName, transportMode, hafasClient, startDate) {
     const center = startCoords || [48.7758, 9.1829];
 
     const drivingResult = await fetchOSRMRoute(center, parkCoords, 'driving');
@@ -922,9 +1219,6 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
     if (transportMode === 'bus') {
         modeKeywords = ['bus'];
         modeLabel = 'bus';
-    } else if (transportMode === 'cycling' || transportMode === 'bicycle') {
-        modeKeywords = ['bike', 'bicycle', 'cycling'];
-        modeLabel = 'cycling';
     } else {
         modeKeywords = ['station', 'halt', 'train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'];
         modeLabel = 'train';
@@ -1033,30 +1327,20 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
         distanceMeters: Math.round(walkDistMeters)
     });
 
-    // Segment 3: Transit/Cycle from stop to destination area
-    if (modeLabel === 'cycling') {
-        const cycleResult = await fetchOSRMRoute(transitFrom, transitTo, 'cycling');
-        segments.push({
-            mode: 'cycling',
-            path: cycleResult?.path || interpolatePoints(transitFrom, transitTo, 8),
-            label: 'Rad',
-            durationMin: cycleResult?.durationMin || Math.max(1, Math.round(distanceMeters(transitFrom, transitTo) / 80)),
-            fromStop: stopName,
-            toStop: destStopName
-        });
-    } else if (hafasClient && (modeLabel === 'train' || modeLabel === 'bus')) {
+    // Segment 3: Transit from stop to destination area
+    if (hafasClient && (modeLabel === 'train' || modeLabel === 'bus')) {
         // Try proper HAFAS station lookup by proximity first
         let fromHafas = await findNearestStationHafas(hafasClient, transitFrom);
         let toHafas = await findNearestStationHafas(hafasClient, transitTo);
 
         let hafasJourney = null;
         if (fromHafas?.stationId && toHafas?.stationId) {
-            hafasJourney = await fetchHafasJourneyById(hafasClient, fromHafas.stationId, toHafas.stationId, modeLabel);
+            hafasJourney = await fetchHafasJourneyById(hafasClient, fromHafas.stationId, toHafas.stationId, modeLabel, startDate);
         }
 
         // Fallback to name-based HAFAS search
         if (!hafasJourney) {
-            hafasJourney = await fetchHafasJourney(hafasClient, transitFrom, transitTo, stopName, destStopName, modeLabel);
+            hafasJourney = await fetchHafasJourney(hafasClient, transitFrom, transitTo, stopName, destStopName, modeLabel, startDate);
         }
 
         if (hafasJourney && hafasJourney.path && hafasJourney.path.length > 1) {
@@ -1125,6 +1409,30 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
         distanceMeters: Math.round(walkDestDistMeters)
     });
 
+    for (let i = 1; i < segments.length; i++) {
+        const prevSeg = segments[i - 1];
+        const curSeg = segments[i];
+        if (!prevSeg?.path?.length || !curSeg?.path?.length) continue;
+        const prevEnd = prevSeg.path[prevSeg.path.length - 1];
+        const curStart = curSeg.path[0];
+        const gap = distanceMeters(prevEnd, curStart);
+        if (gap > 3) {
+            curSeg.path = [prevEnd, ...curSeg.path];
+        } else if (gap > 0) {
+            curSeg.path[0] = prevEnd;
+        }
+    }
+    const lastSeg = segments[segments.length - 1];
+    if (lastSeg?.path?.length) {
+        const lastPt = lastSeg.path[lastSeg.path.length - 1];
+        const gap = distanceMeters(lastPt, destCoords);
+        if (gap > 3) {
+            lastSeg.path.push(destCoords);
+        } else {
+            lastSeg.path[lastSeg.path.length - 1] = destCoords;
+        }
+    }
+
     return { segments, transitFrom, transitTo, stopName, destStopName, nearStop, nearDestStop };
 }
 
@@ -1142,7 +1450,7 @@ async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, d
                 findNearestStationHafas(client, toCoords)
             ]);
             if (fromStation?.stationId && toStation?.stationId) {
-                journey = await doHafasJourney(client, fromStation.stationId, toStation.stationId, null);
+                journey = await doHafasJourney(client, fromStation.stationId, toStation.stationId, null, date);
             }
         } catch (err) {
             journey = null;
@@ -1246,11 +1554,19 @@ async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, d
 
     const totalMin = Math.min(60, walkMin1 + transitMin + walkMin2);
 
-    // Timeline aligned to the requested arrival time
+    // Timeline starts at the requested departure time
     const depTime = new Date(date);
-    depTime.setMinutes(depTime.getMinutes() - totalMin);
     const boardTime = new Date(depTime);
     boardTime.setMinutes(boardTime.getMinutes() + walkMin1);
+
+    const fromCity = cityForCoords(fromCoords[0], fromCoords[1]);
+    const toCity = cityForCoords(toCoords[0], toCoords[1]);
+
+    const rides = buildTransitRides(legs, boardTime);
+    if (rides.length > 0) {
+        const ridesTotal = rides.reduce((s, r) => s + r.durationMin + (r.transferWaitMin || 0), 0);
+        if (ridesTotal > 0) transitMin = Math.round(ridesTotal);
+    }
     const alightTime = new Date(boardTime);
     alightTime.setMinutes(alightTime.getMinutes() + transitMin);
 
@@ -1260,11 +1576,17 @@ async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, d
     } else {
         timeline.push({ time: timeFormatter.format(depTime), mode: 'walking', name: 'Mein Standort', details: `Zu Fuß zur Haltestelle (${walkMin1} Min.)`, durationMin: walkMin1 });
     }
-    timeline.push({ time: timeFormatter.format(boardTime), mode: modeKey, name: fromStopName, details: `${lineName} nehmen → ${toStopName} (${transitMin} Min.)`, durationMin: transitMin });
+    appendTransitTimeline(timeline, rides, timeFormatter, fromCity, toCity, {
+        transitDep: boardTime,
+        transitMin,
+        stopName: fromStopName,
+        destStopName: toStopName,
+        mode: modeKey
+    });
     if (segments[segments.length - 1]?.mode === 'walking') {
-        timeline.push({ time: timeFormatter.format(alightTime), mode: 'walking', name: destName, details: `Fußweg zum Ziel (${walkMin2} Min.)`, durationMin: walkMin2 });
+        timeline.push({ time: timeFormatter.format(alightTime), mode: 'walking', name: toStopName, city: toCity, details: `Fußweg zum Ziel (${walkMin2} Min.)`, durationMin: walkMin2 });
     }
-    timeline.push({ time: timeFormatter.format(alightTime), mode: 'destination', name: destName, details: 'Ankunft am Ziel', durationMin: 0 });
+    timeline.push({ time: timeFormatter.format(alightTime), mode: 'destination', name: destName, city: toCity, details: 'Ankunft am Ziel', durationMin: 0 });
 
     return {
         direct: true,
@@ -1275,7 +1597,10 @@ async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, d
         travelDuration: `${transitMin} Min.`,
         walkTime: walkMin1 + walkMin2,
         walkDistance: `${walkMin1 + walkMin2} Min.`,
-        transitRoute: lineName
+        transitRoute: lineName,
+        estimated,
+        transfers: rides.length > 0 ? rides.length - 1 : 0,
+        hasRealtime: rides.some(r => r.departureDelay != null || r.arrivalDelay != null || r.cancelled)
     };
 }
 
@@ -1296,7 +1621,9 @@ app.post('/api/routes', async (req, res) => {
     const clearRouteTimer = () => { if (!timedOut) clearTimeout(routeTimer); };
 
     try {
-        const { destination, startCoords, arrivalTime, parkingId, transportMode, maxTimeMinutes = 120, destCoords: reqDestCoords } = req.body;
+        const { destination, startCoords, departureTime, arrivalTime, parkingId, transportMode, maxTimeMinutes = 120, destCoords: reqDestCoords } = req.body;
+        // The user-selected time is the *departure* (start) time of the journey.
+        const startTime = departureTime || arrivalTime || null;
 
         // --- Input validation ---
         const isValidCoord = (c) => Array.isArray(c) && c.length === 2
@@ -1319,15 +1646,19 @@ app.post('/api/routes', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Ungültige Zielkoordinaten.' });
         }
 
-        if (arrivalTime) {
-            const parsedDate = new Date(arrivalTime);
+        if (startTime) {
+            const parsedDate = new Date(startTime);
             if (isNaN(parsedDate.getTime())) {
                 clearRouteTimer();
                 return res.status(400).json({ success: false, message: 'Ungültiges Datum oder ungültige Uhrzeit.' });
             }
+            if (parsedDate.getTime() < Date.now()) {
+                clearRouteTimer();
+                return res.status(400).json({ success: false, message: 'Datum und Uhrzeit dürfen nicht in der Vergangenheit liegen.' });
+            }
         }
 
-        const VALID_MODES = ['train', 'bus', 'cycling', 'bicycle', 'transit'];
+        const VALID_MODES = ['train', 'bus', 'transit'];
         if (transportMode && !VALID_MODES.includes(transportMode)) {
             clearRouteTimer();
             return res.status(400).json({ success: false, message: `Ungültiger Transportmodus. Unterstützt: ${VALID_MODES.join(', ')}.` });
@@ -1368,7 +1699,7 @@ app.post('/api/routes', async (req, res) => {
         // skip the Park & Ride algorithm entirely and show only transit steps.
         // This runs BEFORE the parking fetches so a short trip never hits them.
         if (!parkingId && startCoords && destCoords) {
-            const date = arrivalTime ? new Date(arrivalTime) : new Date();
+            const date = startTime ? new Date(startTime) : new Date();
             const timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
             const directRoute = await buildDirectTransitRoute(client, startCoords, destCoords, destName, date, timeFormatter);
             if (timedOut) { clearRouteTimer(); return; }
@@ -1437,38 +1768,109 @@ app.post('/api/routes', async (req, res) => {
         if (timedOut) { clearRouteTimer(); return; }
 
         const now = new Date();
-        const date = arrivalTime ? new Date(arrivalTime) : now;
+        const date = startTime ? new Date(startTime) : now;
         const timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
 
         // ===== Single parking + mode = full 4-segment route =====
         if (parkingId && transportMode && transportMode !== 'transit') {
             const park = liveParkings[0];
-            const parkingPrice = estimateParkingPrice(park.name);
-            const parkingPriceNum = parseFloat(parkingPrice.toFixed(2));
+            const pricing = await fetchPbwPricing(park);
+            const occupancy = occupancyStatus(park);
+            const parkingPriceNum = parseFloat(pricing.numericPrice.toFixed(2));
 
-            const routeData = await generateRouteWithMode(park.coordinates, startCoords, destCoords, destName, transportMode, client);
-            const { segments, stopName, destStopName } = routeData;
+            if (isParkingDestination(park.coordinates, destCoords, park.name, destName)) {
+                const center = startCoords || [48.7758, 9.1829];
+                const dr = await fetchOSRMRoute(center, park.coordinates, 'driving');
+                const drivingPath = dr?.path || interpolatePoints(center, park.coordinates);
+                const driveMinutes = Math.min(240, dr?.durationMin || Math.max(1, Math.round(distanceMeters(center, park.coordinates) / 1000)));
+                const totalTimeMinutes = driveMinutes;
+                const totalCost = parkingPriceNum;
+
+                const depTime = new Date(date);
+                const arrTime = new Date(depTime);
+                arrTime.setMinutes(arrTime.getMinutes() + totalTimeMinutes);
+
+                const segments = [{ mode: 'driving', path: drivingPath, label: 'Fahrt', durationMin: driveMinutes }];
+                const parkCity = cityForCoords(park.coordinates[0], park.coordinates[1]);
+                const timeline = [
+                    { time: timeFormatter.format(depTime), mode: 'driving', name: 'Mein Standort', details: 'Fahrt zum Ziel', durationMin: driveMinutes },
+                    { time: timeFormatter.format(arrTime), mode: 'destination', name: park.name, city: parkCity, details: 'Ankunft am Ziel', durationMin: 0 }
+                ];
+
+                clearRouteTimer();
+                if (!res.headersSent) {
+                    return res.json({
+                        success: true,
+                        data: [{
+                            id: park.id, parkingName: park.name,
+                            websiteUrl: park.websiteUrl || null,
+                            parkingPrice: parkingPriceNum.toFixed(2),
+                            ticketPrice: '0.00',
+                            totalCost: totalCost.toFixed(2),
+                            totalTime: `${totalTimeMinutes} Min.`,
+                            travelDuration: `${driveMinutes} Min.`,
+                            walkTime: 0,
+                            walkDistance: '0 Min.',
+                            transitRoute: 'Fahrt',
+                            segments,
+                            timeline,
+                            transitType: 'driving',
+                            lat: park.coordinates[0],
+                            lng: park.coordinates[1],
+                            totalCapacity: park.totalCapacity,
+                            freeSpaces: park.freeSpaces,
+                            occupancyRate: park.occupancyRate,
+                            hasRealtime: park.hasRealtime,
+                            occupancy,
+                            amenities: park.amenities,
+                            hasFee: park.hasFee,
+                            feeDescription: park.feeDescription,
+                            description: park.description,
+                            isFree: pricing.isFree,
+                            displayPrice: pricing.isFree ? 'Kostenlos' : pricing.displayPrice,
+                            priceDetail: pricing.priceDetail,
+                            tariffType: pricing.tariffType,
+                            hourlyRate: pricing.isFree ? 'Kostenlos' : pricing.displayPrice
+                        }]
+                    });
+                }
+                return;
+            }
+
+            const routeData = await generateRouteWithMode(park.coordinates, startCoords, destCoords, destName, transportMode, client, date);
+            const { segments, stopName, destStopName, nearStop, nearDestStop } = routeData;
+
+            const departStopCoords = nearStop?.coordinates || park.coordinates;
+            const arriveStopCoords = nearDestStop?.coordinates || destCoords;
+            const departCity = cityForCoords(departStopCoords[0], departStopCoords[1]);
+            const arriveCity = cityForCoords(arriveStopCoords[0], arriveStopCoords[1]);
+            const parkCity = cityForCoords(park.coordinates[0], park.coordinates[1]);
+            const transitLeg = segments[2]?.legs || [];
 
             const driveMinutes = segments[0]?.durationMin || 15;
             const walkMin1 = segments[1]?.durationMin || 3;
-            const transitMin = segments[2]?.durationMin || 20;
+            let transitMin = segments[2]?.durationMin || 20;
             const walkMin2 = segments[3]?.durationMin || 3;
             const totalTimeMinutes = Math.min(480, driveMinutes + walkMin1 + transitMin + walkMin2);
 
-            let lineName = 'S-Bahn';
-            let modeLabel = 'transit';
+            let lineName = 'Bahn';
+            let modeLabel = 'train';
             if (transportMode === 'bus') { lineName = 'Bus'; modeLabel = 'bus'; }
-            else if (transportMode === 'cycling' || transportMode === 'bicycle') { lineName = 'Fahrrad'; modeLabel = 'cycling'; }
 
             const totalCost = parkingPriceNum;
-            const savings = Math.max(0, DIRECT_CITY_PARKING_COST - totalCost);
 
             const depTime = new Date(date);
-            depTime.setMinutes(depTime.getMinutes() - totalTimeMinutes);
             const parkArrive = new Date(depTime);
             parkArrive.setMinutes(parkArrive.getMinutes() + driveMinutes);
             const transitDep = new Date(parkArrive);
             transitDep.setMinutes(transitDep.getMinutes() + walkMin1);
+
+            const rides = buildTransitRides(transitLeg, transitDep);
+            const transitEstimated = rides.length === 0;
+            if (rides.length > 0) {
+                const ridesTotal = rides.reduce((s, r) => s + r.durationMin + (r.transferWaitMin || 0), 0);
+                if (ridesTotal > 0) transitMin = Math.round(ridesTotal);
+            }
             const transitArr = new Date(transitDep);
             transitArr.setMinutes(transitArr.getMinutes() + transitMin);
             const destArrive = new Date(transitArr);
@@ -1476,14 +1878,20 @@ app.post('/api/routes', async (req, res) => {
 
             const timeline = [
                 { time: timeFormatter.format(depTime), mode: 'driving', name: 'Mein Standort', details: 'Fahrt zum Parkplatz', durationMin: driveMinutes },
-                { time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, details: 'Auto parken', durationMin: 0 },
-                { time: timeFormatter.format(transitDep), mode: 'walking', name: stopName, details: `${walkMin1} Min. Fußweg zu ${stopName}`, durationMin: walkMin1 },
-                { time: timeFormatter.format(transitArr), mode: modeLabel, name: stopName, details: `${lineName} nehmen → ${destStopName} (${transitMin} Min.)`, durationMin: transitMin },
-                { time: timeFormatter.format(destArrive), mode: 'walking', name: destName, details: `Fußweg zum Ziel (${walkMin2} Min.)`, durationMin: walkMin2 },
-                { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, details: 'Ankunft am Ziel', durationMin: 0 },
+                { time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, city: parkCity, details: `Parken in ${parkCity}`, durationMin: 0 },
+                { time: timeFormatter.format(transitDep), mode: 'walking', name: stopName, city: departCity, details: `${walkMin1} Min. Fußweg zu ${stopName}`, durationMin: walkMin1 }
             ];
-
-            const pricing = getParkingPricing(park);
+            appendTransitTimeline(timeline, rides, timeFormatter, departCity, arriveCity, {
+                transitDep,
+                transitMin,
+                stopName,
+                destStopName,
+                mode: modeLabel
+            });
+            timeline.push(
+                { time: timeFormatter.format(destArrive), mode: 'walking', name: destStopName, city: arriveCity, details: `Fußweg zum Ziel (${walkMin2} Min.)`, durationMin: walkMin2 },
+                { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, city: arriveCity, details: 'Ankunft am Ziel', durationMin: 0 }
+            );
 
             clearRouteTimer(); 
             if (!res.headersSent) {
@@ -1491,27 +1899,36 @@ app.post('/api/routes', async (req, res) => {
                     success: true,
                     data: [{
                         id: park.id, parkingName: park.name,
+                        websiteUrl: park.websiteUrl || null,
                         parkingPrice: parkingPriceNum.toFixed(2),
                         ticketPrice: '0.00',
                         totalCost: totalCost.toFixed(2),
-                        savings: savings.toFixed(2),
                         totalTime: `${totalTimeMinutes} Min.`,
                         travelDuration: `${transitMin} Min.`,
                         walkTime: walkMin1 + walkMin2,
                         walkDistance: `${walkMin1 + walkMin2} Min.`,
                         transitRoute: lineName,
+                        transitEstimated,
+                        transfers: rides.length > 0 ? rides.length - 1 : 0,
+                        journeyHasRealtime: rides.some(r => r.departureDelay != null || r.arrivalDelay != null || r.cancelled),
                         segments,
                         timeline,
                         transitType: modeLabel,
                         lat: park.coordinates[0],
                         lng: park.coordinates[1],
                         totalCapacity: park.totalCapacity,
+                        freeSpaces: park.freeSpaces,
+                        occupancyRate: park.occupancyRate,
+                        hasRealtime: park.hasRealtime,
+                        occupancy,
                         amenities: park.amenities,
                         hasFee: park.hasFee,
                         feeDescription: park.feeDescription,
                         description: park.description,
                         isFree: pricing.isFree,
-                        displayPrice: pricing.displayPrice,
+                        displayPrice: pricing.isFree ? 'Kostenlos' : pricing.displayPrice,
+                        priceDetail: pricing.priceDetail,
+                        tariffType: pricing.tariffType,
                         hourlyRate: pricing.isFree ? 'Kostenlos' : pricing.displayPrice
                     }]
                 });
@@ -1532,7 +1949,6 @@ app.post('/api/routes', async (req, res) => {
         // Find top destination-area stops per mode
         const destTopTrain = findTopTransitStops(destCoords, allStops, ['station', 'halt', 'train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'], 3);
         const destTopBus = findTopTransitStops(destCoords, allStops, ['bus'], 3);
-        const destTopBike = findTopTransitStops(destCoords, allStops, ['bike', 'bicycle', 'cycling'], 3);
 
         // Best pairing: find (parkStop, destStop) that minimises total walking
         function bestPairWalk(parkStops, destStops) {
@@ -1549,34 +1965,36 @@ app.post('/api/routes', async (req, res) => {
             return best;
         }
 
+        // Fetch official pricing for every candidate site (in parallel, cached).
+        const pricingMap = new Map();
+        await Promise.all(liveParkings.map(async (park) => {
+            pricingMap.set(park.id, await fetchPbwPricing(park));
+        }));
+
         for (const park of liveParkings) {
-            const parkingPrice = estimateParkingPrice(park.name);
+            const pricing = pricingMap.get(park.id) || getParkingPricing(park);
+            const parkingPrice = pricing.numericPrice;
             const totalCost = parseFloat(parkingPrice.toFixed(2));
-            const savings = Math.max(0, DIRECT_CITY_PARKING_COST - totalCost);
-            const pricing = getParkingPricing(park);
+            const occupancy = occupancyStatus(park);
             const driveMinutes = Math.min(240, Math.max(1, Math.round(distanceMeters(startCoords || [48.7758, 9.1829], park.coordinates) / 1000)));
 
             // Find top N stops of each type near the parking
             const nearTrain = findTopTransitStops(park.coordinates, allStops, ['station', 'halt', 'train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'], 3);
             const nearBus = findTopTransitStops(park.coordinates, allStops, ['bus'], 3);
-            const nearBike = findTopTransitStops(park.coordinates, allStops, ['bike', 'bicycle', 'cycling'], 3);
 
-            const allNearby = [...nearTrain, ...nearBus, ...nearBike];
+            const allNearby = [...nearTrain, ...nearBus];
             const minWalkToTransit = allNearby.length > 0 ? Math.min(...allNearby.map(s => s.distance)) : Infinity;
 
             const trainTotalWalk = bestPairWalk(nearTrain, destTopTrain);
             const busTotalWalk = bestPairWalk(nearBus, destTopBus);
-            const bikeTotalWalk = bestPairWalk(nearBike, destTopBike);
-            const bestTotalWalk = Math.min(trainTotalWalk, busTotalWalk, bikeTotalWalk);
+            const bestTotalWalk = Math.min(trainTotalWalk, busTotalWalk);
 
             // Determine which mode gives the shortest walk
             let bestMode = 'train';
-            if (busTotalWalk <= trainTotalWalk && busTotalWalk <= bikeTotalWalk) bestMode = 'bus';
-            if (bikeTotalWalk <= trainTotalWalk && bikeTotalWalk <= busTotalWalk) bestMode = 'bicycle';
+            if (busTotalWalk <= trainTotalWalk) bestMode = 'bus';
 
             const hasTrain = nearTrain.length > 0 && nearTrain[0].distance < MAX_WALK_PER_SEGMENT;
             const hasBus = nearBus.length > 0 && nearBus[0].distance < MAX_WALK_PER_SEGMENT;
-            const hasBike = nearBike.length > 0 && nearBike[0].distance < MAX_WALK_PER_SEGMENT;
 
             // Accurate walking time estimates
             const oneWayWalkMeters = Math.round(minWalkToTransit === Infinity ? 200 : minWalkToTransit);
@@ -1597,10 +2015,11 @@ app.post('/api/routes', async (req, res) => {
             const distToDest = distanceMeters(destCoords, park.coordinates);
             allOptions.push({
                 distanceToDest: distToDest,
-                id: park.id, parkingName: park.name,
+id: park.id, parkingName: park.name,
+                            address: park.address,
+                            websiteUrl: park.websiteUrl || null,
                 parkingPrice: parkingPrice.toFixed(2),
                 totalCost: totalCost.toFixed(2),
-                savings: savings.toFixed(2),
                 totalTime: `${driveMinutes + totalWalkTimeMin + transitTimeEst} Min.`,
                 travelDuration: `${transitTimeEst} Min.`,
                 walkTime: totalWalkTimeMin,
@@ -1610,27 +2029,68 @@ app.post('/api/routes', async (req, res) => {
                 lat: park.coordinates[0],
                 lng: park.coordinates[1],
                 totalCapacity: park.totalCapacity,
+                freeSpaces: park.freeSpaces,
+                occupancyRate: park.occupancyRate,
+                hasRealtime: park.hasRealtime,
+                occupancy: occupancy,
                 amenities: park.amenities,
                 hasTrainStop: hasTrain,
                 hasBusStop: hasBus,
-                hasBikeStop: hasBike,
                 nearTrain: nearTrain.length > 0 ? nearTrain[0] : null,
                 nearBus: nearBus.length > 0 ? nearBus[0] : null,
-                nearBike: nearBike.length > 0 ? nearBike[0] : null,
                 destStop: destTopTrain.length > 0 ? destTopTrain[0] : null,
+                transfers: transportMode === 'bus'
+                    ? (nearBus.length > 1 ? 1 : 0)
+                    : (nearTrain.length > 1 ? 1 : 0),
                 hasFee: park.hasFee,
                 feeDescription: park.feeDescription,
                 description: park.description,
                 isFree: pricing.isFree,
-                displayPrice: pricing.displayPrice,
+                displayPrice: pricing.isFree ? 'Kostenlos' : pricing.displayPrice,
+                priceDetail: pricing.priceDetail,
+                tariffType: pricing.tariffType,
                 hourlyRate: pricing.isFree ? 'Kostenlos' : pricing.displayPrice
             });
         }
 
         // Sort by distance to destination (primary), then cost (secondary)
         allOptions.sort((a, b) => a.distanceToDest - b.distanceToDest || parseFloat(a.totalCost) - parseFloat(b.totalCost));
+
+        // ===== Chosen mode filtering + best-option selection =====
+        // The user picks one mode (bus or train) before searching. We keep only
+        // connections available for that mode and highlight the single best
+        // option. The explicit criterion is SHORTEST TOTAL JOURNEY DURATION,
+        // with ties broken by lowest price, then fewest transfers.
+        let preparedOptions = allOptions;
+        if (transportMode && transportMode !== 'transit') {
+            const modeAvailable = transportMode === 'bus' ? (o) => o.hasBusStop : (o) => o.hasTrainStop;
+            const filtered = allOptions.filter(modeAvailable);
+            // Only filter when the chosen mode actually yields connections;
+            // otherwise fall back to the full list so the user isn't stuck empty.
+            if (filtered.length > 0) preparedOptions = filtered;
+        }
+
+        const bestCriterion = 'Kürzeste Gesamtdauer (bei Gleichstand: günstigster Preis, dann wenigste Umstiege)';
+        preparedOptions.forEach((o) => {
+            o.isBest = false;
+            o.bestCriterion = bestCriterion;
+        });
+        if (preparedOptions.length > 0) {
+            // Shortest total journey duration, then lowest cost, then fewest transfers.
+            preparedOptions.sort((a, b) => {
+                const aMins = parseInt(a.totalTime) || 999999;
+                const bMins = parseInt(b.totalTime) || 999999;
+                if (aMins !== bMins) return aMins - bMins;
+                const aCost = parseFloat(a.totalCost) || 0;
+                const bCost = parseFloat(b.totalCost) || 0;
+                if (aCost !== bCost) return aCost - bCost;
+                return (a.transfers || 0) - (b.transfers || 0);
+            });
+            preparedOptions[0].isBest = true;
+        }
+
         if (!res.headersSent) {
-            res.json({ success: true, data: allOptions });
+            res.json({ success: true, data: preparedOptions, bestCriterion, choiceMode: transportMode || 'transit' });
         }
 
     } catch (error) {

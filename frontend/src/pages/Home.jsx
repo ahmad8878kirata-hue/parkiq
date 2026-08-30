@@ -7,7 +7,8 @@ import './Home.css';
 import './Search.css';
 import './Selection.css';
 import RouteSearchForm from '../components/RouteSearchForm';
-import { resolveCoords, buildArrivalISO } from '../services/geocodingService';
+import { resolveCoords, buildDepartureISO } from '../services/geocodingService';
+import { createBaseTileLayer, handleMapTileErrors, setMapDarkMode } from '../services/mapTiles';
 import { API_BASE } from '../config';
 
 const Home = () => {
@@ -36,6 +37,7 @@ const Home = () => {
     const [showSearchSheet, setShowSearchSheet] = useState(false);
     const [loadingLocation, setLoadingLocation] = useState(false);
     const [stationInput, setStationInput] = useState('');
+    const [tileOffline, setTileOffline] = useState(false);
 
     const handleDauerparkticketConfirm = async () => {
         if (stationInput.trim()) {
@@ -73,7 +75,7 @@ const Home = () => {
                 return;
             }
 
-            const arrivalTime = buildArrivalISO(form.year, form.month, form.activeDay, form.time);
+            const departureTime = buildDepartureISO(form.year, form.month, form.activeDay, form.time);
             setShowSearchSheet(false);
             navigate('/results', {
                 state: {
@@ -81,7 +83,8 @@ const Home = () => {
                     startLocation: result.startName,
                     startCoords: result.startCoords,
                     destCoords: result.destCoords,
-                    arrivalTime,
+                    departureTime,
+                    transportMode: form.transportMode || 'train',
                     parkingId: selectedParking?.id
                 }
             });
@@ -97,12 +100,12 @@ const Home = () => {
         const initMap = (centerLatLng, zoom) => {
             if (mapInstance.current || !mapRef.current) return;
             mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView(centerLatLng, zoom);
-            tileLayerRef.current = L.tileLayer(
-                document.body.classList.contains('dark-mode')
-                    ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-                    : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
-                { maxZoom: 19 }
-            ).addTo(mapInstance.current);
+            tileLayerRef.current = createBaseTileLayer().addTo(mapInstance.current);
+            handleMapTileErrors(mapInstance.current, {
+                onError: () => setTileOffline(true),
+                onRecover: () => setTileOffline(false)
+            });
+            setMapDarkMode(mapInstance.current, document.body.classList.contains('dark-mode'));
 
             // Force size recalculation after mount
             setTimeout(() => mapInstance.current?.invalidateSize(), 200);
@@ -263,14 +266,9 @@ const Home = () => {
         );
     }, [locationEnabled]);
 
-    // Update map tiles when dark mode changes
+    // Apply dark mode to the map tile pane (tiles stay the same; CSS filter darkens them)
     useEffect(() => {
-        if (tileLayerRef.current) {
-            const url = darkMode
-                ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
-                : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
-            tileLayerRef.current.setUrl(url);
-        }
+        setMapDarkMode(mapInstance.current, darkMode);
     }, [darkMode]);
 
     const touchStartY = useRef(0);
@@ -288,6 +286,12 @@ const Home = () => {
         <div className="view">
             <div ref={mapRef} className="background-map" />
             <div className="map-overlay" />
+
+            {tileOffline && (
+                <div className="tile-offline-banner" role="alert">
+                    <WarningCircle weight="fill" /> Keine Internetverbindung. Karte kann nicht angezeigt werden. Bitte Verbindung prüfen und erneut versuchen.
+                </div>
+            )}
 
             <div className="top-nav glass-panel">
                 <div style={{ position: 'relative' }}>
@@ -373,7 +377,6 @@ const Home = () => {
                                 <h3 className="parking-sheet-title">{selectedParking.name}</h3>
                                 <button className="icon-btn sheet-close" onClick={() => { setSelectedParking(null); setSheetExpanded(false); }}><X weight="bold" /></button>
                             </div>
-                            {selectedParking.address && <div className="parking-sheet-address">{selectedParking.address}</div>}
                             <div className="parking-sheet-stats">
                                 <div className="ps-stat">
                                     <Car weight="fill" className="ps-stat-icon" />
@@ -552,7 +555,10 @@ const Home = () => {
                         <h3 style={{ marginBottom: '1rem' }}>Info &amp; Hilfe</h3>
 
                         <p style={{ color: 'var(--text-main)', marginBottom: '1.25rem', fontSize: '0.875rem', lineHeight: '1.6' }}>
-                            Diese App unterstützt Sie bei der Planung Ihrer nachhaltigen Mobilität mit Bus, Bahn und Fahrrad.
+                            Diese App unterstützt Sie bei der Planung Ihrer nachhaltigen Mobilität mit Bus und Bahn.
+                        </p>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: '1.6', marginBottom: '1.25rem' }}>
+                            Fahrradabstellanlagen werden in einer zukünftigen Version angezeigt.
                         </p>
                         <p style={{ color: 'var(--text-main)', marginBottom: '1.25rem', fontSize: '0.875rem', lineHeight: '1.6' }}>
                             Bei Fragen oder Problemen kontaktieren Sie uns bitte unter.

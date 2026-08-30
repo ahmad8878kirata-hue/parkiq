@@ -40,18 +40,6 @@ const FALLBACK_STOPS = [
   { name: 'Obertürkheim', coordinates: [48.7643, 9.2696], type: 'bus stop' },
   { name: 'Münster', coordinates: [48.8097, 9.2224], type: 'bus stop' },
   { name: 'Hofen', coordinates: [48.8191, 9.2331], type: 'bus stop' },
-
-  // ===== Bicycle Rentals =====
-  { name: 'Hauptbahnhof (RegioRad)', coordinates: [48.7845, 9.1808], type: 'bike bicycle rental' },
-  { name: 'Schlossplatz (RegioRad)', coordinates: [48.7785, 9.1795], type: 'bike bicycle rental' },
-  { name: 'Universität (RegioRad)', coordinates: [48.7665, 9.1788], type: 'bike bicycle rental' },
-  { name: 'Charlottenplatz (RegioRad)', coordinates: [48.7763, 9.1850], type: 'bike bicycle rental' },
-  { name: 'Feuersee (RegioRad)', coordinates: [48.7737, 9.1670], type: 'bike bicycle rental' },
-  { name: 'Marienplatz', coordinates: [48.7668, 9.1718], type: 'bike bicycle rental' },
-  { name: 'Wilhelma', coordinates: [48.8056, 9.2080], type: 'bike bicycle rental' },
-  { name: 'Killesberg (RegioRad)', coordinates: [48.8048, 9.1680], type: 'bike bicycle rental' },
-  { name: 'Bad Cannstatt (RegioRad)', coordinates: [48.8035, 9.2155], type: 'bike bicycle rental' },
-  { name: 'Vaihingen (RegioRad)', coordinates: [48.7340, 9.1075], type: 'bike bicycle rental' },
 ];
 
 module.exports = FALLBACK_STOPS;

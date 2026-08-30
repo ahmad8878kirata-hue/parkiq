@@ -62,7 +62,7 @@ export async function resolveCoords({
     };
 }
 
-export function buildArrivalISO(year, month, activeDay, time) {
+export function buildDepartureISO(year, month, activeDay, time) {
     const dateStr = `${year}-${(month + 1).toString().padStart(2, '0')}-${activeDay.toString().padStart(2, '0')}T${time}:00`;
     return new Date(dateStr).toISOString();
 }

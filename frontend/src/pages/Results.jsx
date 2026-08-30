@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 const FETCH_TIMEOUT = 70000; // 70s
 import { useParking } from '../context/ParkingContext';
-import { ArrowLeft, MapPin, Car, PersonSimpleWalk, Train, Bus, Bicycle, CircleNotch, CaretLeft, WarningCircle, Ticket, Check } from '@phosphor-icons/react';
+import { ArrowLeft, MapPin, Car, PersonSimpleWalk, Train, Bus, CircleNotch, CaretLeft, WarningCircle, Ticket, Check, ArrowSquareOut, ArrowsLeftRight } from '@phosphor-icons/react';
 import L from 'leaflet';
 import { API_BASE } from '../config';
+import { createBaseTileLayer, handleMapTileErrors } from '../services/mapTiles';
 import './Results.css';
 
 const DEFAULT_HOURLY_RATE = '2 €/Std.';
@@ -15,18 +16,31 @@ const formatEuro = (val) => {
     return n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
 };
 
-const computeDepartureTime = (arrivalTime, totalMin) => {
-    if (!arrivalTime || !totalMin) return null;
-    const arr = new Date(arrivalTime);
+const computeArrivalTime = (departureISO, totalMin) => {
+    if (!departureISO || !totalMin) return null;
+    const start = new Date(departureISO);
+    if (isNaN(start.getTime())) return null;
     const mins = parseInt(String(totalMin).replace(/\D/g, ''), 10);
     if (isNaN(mins)) return null;
-    const dep = new Date(arr.getTime() - mins * 60000);
-    return dep.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    const arr = new Date(start.getTime() + mins * 60000);
+    return arr.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 };
 
-const formatIsoTime = (iso) => {
-    if (!iso) return '';
-    return new Date(iso).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+const formatJourneyWindow = (departureISO, totalMin) => {
+    if (!departureISO || !totalMin) return null;
+    const start = new Date(departureISO);
+    if (isNaN(start.getTime())) return null;
+    const dep = start.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    const arr = computeArrivalTime(departureISO, totalMin);
+    return arr ? `${dep} – ${arr}` : dep;
+};
+
+const parkingCity = (opt) => {
+    const addr = (opt.address || '').trim();
+    if (!addr) return '';
+    const parts = addr.split(',').map((s) => s.trim()).filter(Boolean);
+    const last = parts[parts.length - 1] || '';
+    return last.replace(/\d{5}/g, '').trim();
 };
 
 function getParkingDisplayPricing(opt) {
@@ -46,17 +60,48 @@ function getParkingDisplayPricing(opt) {
   return { label: formatEuro(opt.totalCost), className: 'badge-default', isFree: false };
 }
 
-const MODE_META = {
-    train: { icon: '🚆', label: 'Bahn', color: '#f43f5e' },
-    bus: { icon: '🚌', label: 'Bus', color: '#3b82f6' },
-    bicycle: { icon: '🚲', label: 'Fahrrad', color: '#22c55e' }
+// Human-readable occupancy status text + CSS class.
+const OCCUPANCY_META = {
+    available: { label: 'Freie Plätze verfügbar', className: 'occupancy-available' },
+    occupied: { label: 'Aktuell belegt', className: 'occupancy-occupied' },
+    full: { label: 'Keine freien Plätze verfügbar', className: 'occupancy-full' },
+    unknown: { label: 'Auslastung nicht verfügbar', className: 'occupancy-unknown' }
 };
 
-const MODE_NAME_DE = { train: 'Bahn', bus: 'Bus', bicycle: 'Fahrrad' };
+const getOccupancyMeta = (opt) => {
+    const key = opt?.occupancy || (opt?.hasRealtime ? (opt?.freeSpaces > 0 ? (opt?.freeSpaces < opt?.totalCapacity ? 'occupied' : 'available') : 'full') : 'unknown');
+    return OCCUPANCY_META[key] || OCCUPANCY_META.unknown;
+};
+
+const MODE_META = {
+    train: { icon: '🚆', label: 'Bahn', color: '#f43f5e' },
+    bus: { icon: '🚌', label: 'Bus', color: '#3b82f6' }
+};
+
+const MODE_NAME_DE = { train: 'Bahn', bus: 'Bus' };
+
+const haversineMeters = (a, b) => {
+    const R = 6371000;
+    const dLat = (b[0] - a[0]) * Math.PI / 180;
+    const dLon = (b[1] - a[1]) * Math.PI / 180;
+    const x = Math.sin(dLat / 2) ** 2
+        + Math.cos(a[0] * Math.PI / 180) * Math.cos(b[0] * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+};
+
+const CONNECTOR_COLOR = '#94a3b8';
+const drawGapConnector = (map, layers, from, to) => {
+    if (haversineMeters(from, to) <= 30) return;
+    const connector = L.polyline([from, to], {
+        color: CONNECTOR_COLOR, weight: 3, opacity: 0.7, dashArray: '4, 4'
+    }).addTo(map);
+    layers.push(connector);
+};
 
 const Results = () => {
     const navigate = useNavigate();
     const locationState = useLocation();
+    const transportMode = locationState.state?.transportMode || 'train';
     const { parkingType, hasJobTicket, hasDauerparkticket, dauerparkticketStation, dauerparkticketStationCoords } = useParking();
     const mapRef = useRef(null);
     const mapInstance = useRef(null);
@@ -83,7 +128,8 @@ const Results = () => {
     };
 
     const [routeOptions, setRouteOptions] = useState([]);
-    const [selectedMode, setSelectedMode] = useState('train');
+    const [bestCriterion, setBestCriterion] = useState(null);
+    const [selectedMode, setSelectedMode] = useState(transportMode);
     const [sortBy, setSortBy] = useState('price');
     const [sortOrder, setSortOrder] = useState('asc');
     const sortedOptions = [...routeOptions]
@@ -94,43 +140,26 @@ const Results = () => {
         })
         .slice(0, 10);
 
-    // Determine best transport mode: which mode has the fastest total trip time
-    const bestMode = (() => {
-        const modeKeys = ['train', 'bus', 'bicycle'];
-        const modeHasFlag = { train: 'hasTrainStop', bus: 'hasBusStop', bicycle: 'hasBikeStop' };
-        let best = null;
-        let bestTime = Infinity;
-        for (const mode of modeKeys) {
-            const available = routeOptions.filter(o => o[modeHasFlag[mode]]);
-            if (available.length === 0) continue;
-            const fastest = Math.min(...available.map(o => parseInt(o.totalTime) || 999));
-            if (fastest < bestTime) { bestTime = fastest; best = mode; }
-        }
-        return best;
-    })();
-
+    // The transport mode chosen by the user before the search: used both for
+    // filtering the option list and for the currently displayed trip.
+    const activeMode = selectedMode;
     const [selectedParking, setSelectedParking] = useState(null);
     const [isDirectTransit, setIsDirectTransit] = useState(false);
     const [routeData, setRouteData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [loadingRoute, setLoadingRoute] = useState(false);
+    const [tileOffline, setTileOffline] = useState(false);
     const [error, setError] = useState(null);
     const [isNavigating, setIsNavigating] = useState(false);
     const [currentStep, setCurrentStep] = useState(0);
     const navLayersRef = useRef([]);
-
-    // Mode of the currently displayed trip: the open route's mode in the detail
-    // view, or the primary (first) option's mode while browsing the list.
-    const activeMode = selectedParking
-        ? selectedMode
-        : (sortedOptions[0]?.bestTransitMode || bestMode || selectedMode);
     const navPulseRef = useRef(null);
 
     const destination = locationState.state?.destination || 'Baden-Württemberg Zentrum';
     const startLocation = locationState.state?.startLocation || 'Your Location';
     const startCoords = locationState.state?.startCoords || [48.6616, 9.0654];
     const destCoords = locationState.state?.destCoords || null;
-    const arrivalTime = locationState.state?.arrivalTime;
+    const departureTime = locationState.state?.departureTime || locationState.state?.arrivalTime;
     const parkingId = locationState.state?.parkingId || null;
     const maxTimeMinutes = locationState.state?.maxTimeMinutes || 120;
 
@@ -163,7 +192,7 @@ const Results = () => {
                 const res = await fetch(`${API_BASE}/api/routes`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ destination, startCoords, destCoords, arrivalTime, parkingId, maxTimeMinutes }),
+                    body: JSON.stringify({ destination, startCoords, destCoords, departureTime, transportMode: selectedMode, parkingId, maxTimeMinutes }),
                     signal: controller.signal
                 });
                 if (!cancelled) clearTimeout(timer);
@@ -172,10 +201,11 @@ const Results = () => {
                 if (!json.success) throw new Error(json.message || 'Unknown error');
 
                 if (!cancelled) {
+                    setBestCriterion(json.bestCriterion || null);
                     if (json.directTransit) {
                         setIsDirectTransit(true);
                         setSelectedParking(null);
-                        setSelectedMode(json.directTransit.mode || 'train');
+                        setSelectedMode(selectedMode);
                         setRouteOptions([]);
                         setRouteData(json.directTransit);
                         setIsExpanded(true);
@@ -187,6 +217,7 @@ const Results = () => {
                             hasTransitDiscount: hasJobTicket,
                             isDauerparkticketFree: isNearDauerparkticketStation
                         }));
+                        setSelectedMode(selectedMode);
                         setRouteOptions(enriched);
                     }
                 }
@@ -202,14 +233,18 @@ const Results = () => {
         };
         fetchOptions();
         return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
-    }, [destination, startCoords, destCoords, arrivalTime, parkingId, hasJobTicket]);
+    }, [destination, startCoords, destCoords, departureTime, selectedMode, parkingId, hasJobTicket]);
 
     // Init map with markers
     useEffect(() => {
         if (mapInstance.current || !mapRef.current || loading) return;
 
         mapInstance.current = L.map(mapRef.current, { zoomControl: false }).setView(startCoords, 12);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(mapInstance.current);
+        createBaseTileLayer().addTo(mapInstance.current);
+        handleMapTileErrors(mapInstance.current, {
+            onError: () => setTileOffline(true),
+            onRecover: () => setTileOffline(false)
+        });
         mapInstance.current.on('click', () => setIsExpanded(false));
         setTimeout(() => mapInstance.current?.invalidateSize(), 200);
 
@@ -241,7 +276,7 @@ const Results = () => {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    destination, startCoords, destCoords, arrivalTime,
+                    destination, startCoords, destCoords, departureTime,
                     parkingId: parking.id,
                     transportMode: mode,
                     maxTimeMinutes
@@ -278,7 +313,7 @@ const Results = () => {
     };
 
     const handleSelectParking = (opt) => {
-        const mode = opt.bestTransitMode || selectedMode;
+        const mode = selectedMode;
         setIsDirectTransit(false);
         setSelectedParking(opt);
         setSelectedMode(mode);
@@ -299,6 +334,8 @@ const Results = () => {
         const bounds = L.latLngBounds([]);
         bounds.extend(startCoords);
 
+        let prevEndPt = null;
+
         if (routeData.segments && routeData.segments.length > 0) {
             let stepNum = 1;
             routeData.segments.forEach((seg, segIdx) => {
@@ -306,12 +343,14 @@ const Results = () => {
                 if (!seg.path || seg.path.length < 2) return;
                 seg.path.forEach(pt => bounds.extend(pt));
 
+                const segStart = seg.path[0];
+                if (prevEndPt) drawGapConnector(map, layers, prevEndPt, segStart);
+
                 let modeColor, modeKey, glowColor, lineWeight, dashArray, modeLabel;
                 if (mode === 'driving') { modeColor = '#64748b'; modeKey = 'driving'; glowColor = 'rgba(100,116,139,0.25)'; lineWeight = 6; dashArray = ''; modeLabel = 'Fahrt'; }
                 else if (mode === 'walking') { modeColor = '#0ea5e9'; modeKey = 'walking'; glowColor = 'rgba(14,165,233,0.3)'; lineWeight = 6; dashArray = '10, 6'; modeLabel = 'Fußweg'; }
                 else if (mode === 'transit' || mode === 'train') { modeColor = '#e11d48'; modeKey = 'train'; glowColor = 'rgba(225,29,72,0.2)'; lineWeight = 7; dashArray = ''; modeLabel = 'Bahn'; }
                 else if (mode === 'bus') { modeColor = '#7c3aed'; modeKey = 'bus'; glowColor = 'rgba(124,58,237,0.2)'; lineWeight = 6; dashArray = '12, 6'; modeLabel = 'Bus'; }
-                else if (mode === 'cycling') { modeColor = '#f59e0b'; modeKey = 'cycling'; glowColor = 'rgba(245,158,11,0.2)'; lineWeight = 5; dashArray = '16, 8'; modeLabel = 'Rad'; }
 
                 const glow = L.polyline(seg.path, {
                     color: glowColor || modeColor, weight: lineWeight + 8, opacity: 0.35,
@@ -349,6 +388,7 @@ const Results = () => {
                 }).addTo(map);
                 layers.push(labelMarker);
 
+                prevEndPt = seg.path[seg.path.length - 1];
                 stepNum++;
             });
         }
@@ -369,6 +409,13 @@ const Results = () => {
             ? routeData.segments[routeData.segments.length - 1].path.slice(-1)[0]
             : null);
         if (finalDestCoords) {
+            if (prevEndPt && haversineMeters(prevEndPt, finalDestCoords) > 30) {
+                const finalLeg = L.polyline([prevEndPt, finalDestCoords], {
+                    color: '#3b82f6', weight: 4, opacity: 0.85, dashArray: '6, 6',
+                    lineCap: 'round', lineJoin: 'round'
+                }).addTo(map);
+                layers.push(finalLeg);
+            }
             const destMarker = L.marker(finalDestCoords, {
                 icon: L.divIcon({
                     className: 'map-node dest-node',
@@ -423,11 +470,11 @@ const Results = () => {
 
     const MODE_COLORS = {
         driving: '#64748b', walking: '#0ea5e9', train: '#e11d48',
-        transit: '#e11d48', bus: '#7c3aed', cycling: '#f59e0b'
+        transit: '#e11d48', bus: '#7c3aed'
     };
     const MODE_LABELS = {
         driving: 'Fahrt', walking: 'Fußweg', train: 'Bahn nehmen',
-        transit: 'Bahn nehmen', bus: 'Bus nehmen', cycling: 'Radfahren'
+        transit: 'Bahn nehmen', bus: 'Bus nehmen'
     };
 
     useEffect(() => {
@@ -500,7 +547,7 @@ const Results = () => {
         if (mode === 'parking') return <span style={{fontWeight:'bold',fontSize:15,color:'#f43f5e'}}>P</span>;
         if (mode === 'transit' || mode === 'train') return <Train {...commonProps} color="#f43f5e" />;
         if (mode === 'bus') return <Bus {...commonProps} color="#3b82f6" />;
-        if (mode === 'cycling') return <Bicycle {...commonProps} color="#22c55e" />;
+        if (mode === 'transfer') return <ArrowsLeftRight {...commonProps} color="#f59e0b" />;
         if (mode === 'walking') return <PersonSimpleWalk {...commonProps} color="#22c55e" />;
         if (mode === 'destination') return <MapPin weight="fill" size={20} color="#3b82f6" />;
         return <PersonSimpleWalk weight="fill" size={20} />;
@@ -512,7 +559,6 @@ const Results = () => {
             <span ref={iconRef('walking')}><PersonSimpleWalk weight="fill" size={16} /></span>
             <span ref={iconRef('train')}><Train weight="fill" size={16} /></span>
             <span ref={iconRef('bus')}><Bus weight="fill" size={16} /></span>
-            <span ref={iconRef('cycling')}><Bicycle weight="fill" size={16} /></span>
         </div>
     );
 
@@ -554,6 +600,12 @@ const Results = () => {
             ) : (
                 <>
                     <div ref={mapRef} className="main-map" />
+
+                    {tileOffline && (
+                        <div className="tile-offline-banner" role="alert">
+                            <WarningCircle weight="fill" /> Keine Internetverbindung. Route kann nicht angezeigt werden. Bitte Verbindung prüfen und erneut versuchen.
+                        </div>
+                    )}
 
                     {!isNavigating ? (
                         <div className="results-top">
@@ -624,7 +676,7 @@ const Results = () => {
                             {/* Options list */}
                             {!selectedParking && !loadingRoute && !routeData && (
                                 <div className="options-list">
-                                    <div className="flex-between mb-3">
+                                    <div className="flex-between mb-2">
                                         <h4 className="text-muted text-sm font-semibold">PARKPLATZ AUSWÄHLEN</h4>
                                         <div className="sort-bar">
                                             <button className={`sort-btn ${sortBy === 'price' ? 'active' : ''}`} onClick={() => { if (sortBy === 'price') setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc'); else { setSortBy('price'); setSortOrder('asc'); } }}>
@@ -635,6 +687,14 @@ const Results = () => {
                                             </button>
                                         </div>
                                     </div>
+                                    {bestCriterion && routeOptions.length > 0 && (
+                                        <div className="best-criteria-banner">
+                                            <span className="best-criteria-dot" />
+                                            <span className="best-criteria-text">
+                                                <strong>Beste Option</strong> (grün markiert): {bestCriterion}
+                                            </span>
+                                        </div>
+                                    )}
                                     {sortedOptions.length === 0 && routeOptions.length > 0 && (
                                         <p className="text-muted text-sm text-center">Keine passenden Optionen</p>
                                     )}
@@ -643,9 +703,9 @@ const Results = () => {
                                         const transitFree = opt.hasTransitDiscount;
                                         const dauerparkFree = opt.isDauerparkticketFree;
                                         return (
-                                        <div key={idx} className={`option-card ${transitFree || dauerparkFree ? 'special-card' : ''}`} onClick={() => handleSelectParking(opt)}>
+                                        <div key={idx} className={`option-card ${opt.isBest ? 'best-option-card' : ''} ${transitFree || dauerparkFree ? 'special-card' : ''}`} onClick={() => handleSelectParking(opt)}>
                                             <div className="flex-between mb-2">
-                                                <div className="font-bold">{opt.parkingName}<span className={`category-tag ${opt.category?.toLowerCase() || 'public'}`}>{opt.category || 'Öffentlich'}</span></div>
+                                                <div className="font-bold">{opt.isBest && <span className="best-option-tag"><Check weight="bold" size={11} /> Beste Option</span>}{opt.parkingName}<span className={`category-tag ${opt.category?.toLowerCase() || 'public'}`}>{opt.category || 'Öffentlich'}</span></div>
                                                 <div className="price-container">
                                                     <div className={`font-bold text-primary ${dauerparkFree ? 'badge-free' : displayPrice.className}`}>
                                                         {dauerparkFree ? 'Kostenloses Parken' : displayPrice.label}
@@ -654,23 +714,18 @@ const Results = () => {
                                             </div>
                                             <div className="option-details">
                                                 <div className="flex-between text-sm text-muted">
-                                                    <div>{computeDepartureTime(arrivalTime, opt.totalTime) && arrivalTime ? `${computeDepartureTime(arrivalTime, opt.totalTime)} – ${formatIsoTime(arrivalTime)}` : opt.totalTime}</div>
-                                                    {!displayPrice.isFree && !dauerparkFree && <div>{formatEuro(opt.savings)} sparen</div>}
+                                                    <div>{formatJourneyWindow(departureTime, opt.totalTime) || opt.totalTime}</div>
                                                     {transitFree && <div className="text-success">Job-Ticket aktiv</div>}
                                                     {dauerparkFree && <div className="text-success">Dauerparkticket: Station</div>}
                                                 </div>
-                                                {(opt.nearTrain?.name || opt.nearBus?.name || opt.nearBike?.name) && (
+                                                <div className={`occupancy-status ${getOccupancyMeta(opt).className}`}>
+                                                    <span className="occupancy-dot" />
+                                                    {getOccupancyMeta(opt).label}
+                                                </div>
+                                                {parkingCity(opt) && (
                                                     <div className="text-xs text-muted mt-1" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                                                        <span>🚶 {opt.walkTime} Min.</span>
-                                                        <span>→</span>
-                                                        <span style={{ fontWeight: 600 }}>
-                                                            {opt.bestTransitMode === 'train' && opt.nearTrain?.name}
-                                                            {opt.bestTransitMode === 'bus' && opt.nearBus?.name}
-                                                            {opt.bestTransitMode === 'bicycle' && opt.nearBike?.name}
-                                                        </span>
-                                                        <span className="tag" style={{ fontSize: '9px', background: 'var(--primary)', color: '#fff', borderRadius: '4px', padding: '1px 5px' }}>
-                                                            {opt.bestTransitMode === 'train' ? 'Bahn' : opt.bestTransitMode === 'bus' ? 'Bus' : 'Rad'}
-                                                        </span>
+                                                        <MapPin size={12} />
+                                                        <span style={{ fontWeight: 600 }}>{parkingCity(opt)}</span>
                                                     </div>
                                                 )}
                                             </div>
@@ -707,7 +762,9 @@ const Results = () => {
                                                 {routeData.timeline[0].time} &ndash; {routeData.timeline[routeData.timeline.length - 1].time}
                                             </p>
                                         )}
-                                        <p className="text-center text-muted text-sm mb-4">{isDirectTransit ? destination : `${selectedParking?.parkingName} — ${MODE_NAME_DE[selectedMode] || selectedMode}`}</p>
+                                        <p className="text-center text-muted text-sm mb-4">{isDirectTransit
+                                            ? destination
+                                            : `${selectedParking?.parkingName} — ${routeData?.transitType === 'driving' ? 'Fahrt' : (MODE_NAME_DE[selectedMode] || selectedMode)}`}</p>
                                         {hasJobTicket && (
                                             <div className="text-center mb-2">
                                                 <div className="badge-transit-free"><Ticket weight="fill" /> Job-Ticket: ÖPNV ist kostenlos</div>
@@ -753,13 +810,47 @@ const Results = () => {
                                                     <div className="title font-bold">
                                                         {(leg.name === 'Current Location' || leg.name === 'Mein Standort') ? effectiveStartLocation : leg.name}
                                                     </div>
-                                                    <div className="subtitle text-sm text-muted">{leg.details}</div>
+                                                    {leg.city && (
+                                                        <div className="stop-city text-sm text-muted">{leg.city}</div>
+                                                    )}
+                                                    {leg.lineName && (
+                                                        <div className="ride-meta">
+                                                            <span className="line-badge">{leg.lineName}</span>
+                                                            {leg.cancelled && <span className="cancelled-badge">Ausgefallen</span>}
+                                                            {!leg.cancelled && leg.delay > 0 && <span className="delay-badge">+{leg.delay} Min.</span>}
+                                                        </div>
+                                                    )}
+                                                    {leg.estimated && <div className="estimated-note text-sm text-muted">{leg.details}</div>}
+                                                    {leg.transferStops && leg.transferStops.length > 0 && leg.transferStops.map((ts, tIdx) => (
+                                                        <div className="stop-row" key={`ts-${tIdx}`}>
+                                                            <span className="stop-arrow">→</span>
+                                                            <div>
+                                                                <div className="title font-bold">{ts.name}</div>
+                                                                {ts.city && <div className="stop-city text-sm text-muted">{ts.city}</div>}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                    {leg.arrivalStop && (
+                                                        <div className="stop-row">
+                                                            <span className="stop-arrow">→</span>
+                                                            <div>
+                                                                <div className="title font-bold">{leg.arrivalStop.name}</div>
+                                                                {leg.arrivalStop.city && <div className="stop-city text-sm text-muted">{leg.arrivalStop.city}</div>}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {!leg.estimated && <div className="subtitle text-sm text-muted">{leg.details}</div>}
                                                 </div>
                                             </div>
                                         ))}
                                     </div>
                                     {!isDirectTransit && (
-                                        <button className="btn btn-outline w-100 mt-6 mb-2" onClick={() => handleEmailReservation(routeData.parkingName)}>Parkplatzreservierung</button>
+                                        <button className="btn btn-outline w-100 mt-6 mb-2" onClick={() => handleEmailReservation(routeData.parkingName)}>Parkplatz-Details</button>
+                                    )}
+                                    {!isDirectTransit && (
+                                        <a href="https://www.pbw.de/parken/detail/243" target="_blank" rel="noopener noreferrer" className="btn btn-outline w-100 mb-2" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                                            <ArrowSquareOut weight="bold" /> Objekt-Details ansehen
+                                        </a>
                                     )}
                                     <button className="btn btn-primary btn-large w-100 mb-4 shadow-glow" onClick={handleStartNavigation}>Navigation starten</button>
                                 </div>

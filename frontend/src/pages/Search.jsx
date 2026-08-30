@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { X } from '@phosphor-icons/react';
 import './Search.css';
 import RouteSearchForm from '../components/RouteSearchForm';
-import { resolveCoords, buildArrivalISO } from '../services/geocodingService';
+import { resolveCoords, buildDepartureISO } from '../services/geocodingService';
 
 const Search = () => {
     const navigate = useNavigate();
@@ -36,14 +36,15 @@ const Search = () => {
                 return;
             }
 
-            const arrivalTime = buildArrivalISO(form.year, form.month, form.activeDay, form.time);
+            const departureTime = buildDepartureISO(form.year, form.month, form.activeDay, form.time);
             navigate('/results', {
                 state: {
                     destination: result.destName,
                     startLocation: result.startName,
                     startCoords: result.startCoords,
                     destCoords: result.destCoords,
-                    arrivalTime,
+                    departureTime,
+                    transportMode: form.transportMode || 'train',
                     parkingId: selectedParking?.id
                 }
             });

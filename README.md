@@ -5,7 +5,7 @@ Park-and-ride trip planner for Stuttgart — finds parking near transit and rout
 ## Features
 
 - **Live parking data** from MobiData BW API — real-time availability for park-and-ride sites across Baden-Württemberg
-- **Multiple route options** — different transit modes (bus, train, bicycle) with cost breakdowns and duration estimates
+- **Multiple route options** — different transit modes (bus, train) with cost breakdowns and duration estimates
 - **Real road routing** via OSRM — driving paths follow actual streets
 - **Direct transit routes** — when the destination is close enough, shows transit-only options without parking
 - **Interactive map** (Leaflet) — clickable parking markers, route visualization, dark mode support
@@ -123,7 +123,7 @@ Calculates routes from the user's location to a destination via a parking site.
 | `startCoords` | No | `[lat, lon]` user's current position |
 | `arrivalTime` | No | ISO 8601 arrival time |
 | `parkingId` | No | Specific parking site ID to route from |
-| `transportMode` | No | `train`, `bus`, `cycling`, `bicycle`, or `transit` |
+| `transportMode` | No | `train`, `bus`, or `transit` |
 | `maxTimeMinutes` | No | Max transit time in minutes (1–1440, default 120) |
 
 **Validation:** All fields are validated before processing. Invalid requests return `400` with a German error message.

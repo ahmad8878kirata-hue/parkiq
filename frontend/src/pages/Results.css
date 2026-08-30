@@ -2,6 +2,22 @@
   position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 0;
 }
 
+.tile-offline-banner {
+  position: absolute; top: 5rem; left: 50%; transform: translateX(-50%);
+  z-index: 30;
+  display: flex; align-items: center; gap: 0.5rem;
+  max-width: calc(100% - 2rem);
+  padding: 0.75rem 1rem;
+  background: #fff7ed; color: #9a3412;
+  border: 1px solid #fdba74;
+  border-radius: 0.75rem;
+  font-size: 0.8125rem; font-weight: 600;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  text-align: left;
+}
+body.dark-mode .tile-offline-banner { background: #3a2a12; color: #fbbf24; border-color: #b45309; }
+body.dark-mode .tile-offline-banner svg { color: #fbbf24; }
+
 .results-top {
   position: absolute; top: 0; left: 0; right: 0; z-index: 20;
   display: flex; flex-direction: column; gap: 0.5rem;
@@ -142,18 +158,66 @@ body.dark-mode .mode-tab.active {
 .duration-badge.train { background: rgba(244,63,94,0.12); color: #f43f5e; }
 .duration-badge.transit { background: rgba(244,63,94,0.12); color: #f43f5e; }
 .duration-badge.bus { background: rgba(124,58,237,0.12); color: #7c3aed; }
-.duration-badge.cycling { background: rgba(245,158,11,0.12); color: #f59e0b; }
 
 .line { width: 2px; flex: 1; margin: 4px 0; border-radius: 2px; }
 .driving-line { background: #64748b; }
 .walking-line { background: transparent; border-left: 2px dashed #0ea5e9; }
 .transit-line, .train-line { background: var(--primary); }
 .bus-line { background: #7c3aed; }
-.cycling-line { background: #f59e0b; }
 
 .details { flex: 1; padding-bottom: 1.5rem; }
 .pb-0 .details { padding-bottom: 0; }
 .details .subtitle { color: var(--text-muted); font-size: 0.875rem; margin-top: 0.25rem; line-height: 1.4; }
+
+.ride-meta { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.35rem; }
+.line-badge {
+    display: inline-flex; align-items: center;
+    padding: 0.05rem 0.5rem; border-radius: 999px;
+    background: var(--accent); color: #fff;
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+.delay-badge {
+    display: inline-flex; align-items: center;
+    padding: 0.05rem 0.45rem; border-radius: 999px;
+    background: #fff7ed; color: #c2410c;
+    border: 1px solid #fdba74;
+    font-size: 0.72rem; font-weight: 700; white-space: nowrap;
+}
+.cancelled-badge {
+    display: inline-flex; align-items: center;
+    padding: 0.05rem 0.45rem; border-radius: 999px;
+    background: #fee2e2; color: #b91c1c;
+    border: 1px solid #fca5a5;
+    font-size: 0.72rem; font-weight: 700; white-space: nowrap;
+}
+.estimated-note {
+    font-style: italic;
+    margin-top: 0.3rem;
+    line-height: 1.4;
+}
+
+.stop-city {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-top: 1px;
+    line-height: 1.3;
+}
+.stop-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
+}
+.stop-row .title { font-size: 0.9rem; line-height: 1.3; }
+.stop-arrow {
+    color: var(--primary);
+    font-weight: 800;
+    line-height: 1.4;
+    flex-shrink: 0;
+}
+body.dark-mode .stop-city { color: #a3a3a3; }
 
 .walking-badge {
   display: inline-flex; align-items: center; gap: 0.25rem;
@@ -313,6 +377,63 @@ body.dark-mode .sort-btn.active {
     border-color: var(--text-light);
 }
 
+.best-criteria-banner {
+    display: flex; align-items: flex-start; gap: 0.5rem;
+    background: rgba(34, 197, 94, 0.08);
+    border: 1px solid rgba(34, 197, 94, 0.4);
+    border-radius: var(--radius-md);
+    padding: 0.6rem 0.8rem; margin-bottom: 0.9rem;
+}
+.best-criteria-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #22c55e; flex-shrink: 0; margin-top: 0.18rem;
+    box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
+}
+.best-criteria-text {
+    color: var(--text-main); font-size: 0.78rem; line-height: 1.4;
+}
+
+.best-option-card {
+    border-color: #22c55e !important;
+    background: linear-gradient(180deg, rgba(34, 197, 94, 0.1), rgba(34, 197, 94, 0.02));
+    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35), var(--shadow-sm);
+}
+.best-option-card:hover {
+    border-color: #22c55e !important;
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.4), var(--shadow-md);
+}
+.best-option-tag {
+    display: inline-flex; align-items: center; gap: 0.25rem;
+    background: #22c55e; color: #fff;
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 0.12rem 0.45rem; border-radius: 999px;
+    margin-right: 0.4rem; vertical-align: middle;
+}
+
+.occupancy-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin-top: 0.35rem;
+}
+.occupancy-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.occupancy-available { color: var(--success, #22c55e); }
+.occupancy-available .occupancy-dot { background: var(--success, #22c55e); }
+.occupancy-occupied { color: #f59e0b; }
+.occupancy-occupied .occupancy-dot { background: #f59e0b; }
+.occupancy-full { color: var(--primary, #ef4444); }
+.occupancy-full .occupancy-dot { background: var(--primary, #ef4444); }
+.occupancy-unknown { color: var(--text-muted); }
+.occupancy-unknown .occupancy-dot { background: var(--text-muted); }
+
 /* Custom Route Markers */
 .custom-route-icon {
     display: flex;
@@ -337,7 +458,6 @@ body.dark-mode .sort-btn.active {
 .route-icon-node.transit, .route-icon-node.train { border-color: #e11d48; }
 .route-icon-node.bus { border-color: #7c3aed; }
 .route-icon-node.walking { border-color: #0ea5e9; }
-.route-icon-node.cycling { border-color: #f59e0b; }
 
 .route-label-node {
     pointer-events: none;
@@ -396,10 +516,6 @@ body.dark-mode .sort-btn.active {
 .transit-badge.bus {
     background: rgba(124, 58, 237, 0.1);
     color: #7c3aed;
-}
-.transit-badge.cycling {
-    background: rgba(245, 158, 11, 0.1);
-    color: #f59e0b;
 }
 .transit-badge.walking {
     background: rgba(100, 116, 139, 0.1);
@@ -600,6 +716,13 @@ body.dark-mode .destination-pill {
 
 body.dark-mode .route-timeline .timeline-item .time {
     color: #d4d4d4;
+}
+
+body.dark-mode .delay-badge {
+    background: #431407; color: #fdba74; border-color: #9a3412;
+}
+body.dark-mode .cancelled-badge {
+    background: #450a0a; color: #fca5a5; border-color: #991b1b;
 }
 
 body.dark-mode .details .subtitle {

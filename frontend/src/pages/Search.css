@@ -49,6 +49,45 @@
   font-weight: 500;
 }
 
+.mode-selector-wrap {
+  margin-bottom: 1rem;
+}
+.mode-selector-label {
+  font-size: 0.72rem; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.04em;
+  margin-bottom: 0.4rem; padding-left: 0.25rem;
+}
+.mode-selector {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;
+}
+.mode-option {
+  display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+  padding: 0.7rem; border-radius: var(--radius-md);
+  border: 1.5px solid var(--border-color); background: var(--surface);
+  color: var(--text-muted); font-weight: 600; font-size: 0.9rem;
+  cursor: pointer; transition: all 0.15s ease;
+}
+.mode-option-icon {
+  font-size: 1.1rem; display: inline-flex;
+}
+.mode-option:hover {
+  border-color: var(--primary-light);
+}
+.mode-option.active {
+  border-color: var(--primary); background: rgba(244, 63, 94, 0.08);
+  color: var(--primary); box-shadow: 0 2px 8px rgba(244, 63, 94, 0.15);
+}
+body.dark-mode .mode-option.active {
+  background: rgba(244, 63, 94, 0.18);
+}
+.mode-option[data-mode='bus'].active {
+  border-color: #3b82f6; background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6; box-shadow: 0 2px 8px rgba(59, 130, 246, 0.15);
+}
+body.dark-mode .mode-option[data-mode='bus'].active {
+  background: rgba(59, 130, 246, 0.2);
+}
+
 .date-btn {
   display: flex; align-items: center; gap: 0.4rem;
   padding: 0.5rem 1.2rem; font-size: 0.875rem;
@@ -103,18 +142,31 @@
 .day.active { background: var(--primary); color: white; }
 
 .time-picker {
-  display: flex; align-items: center; gap: 1rem;
+  display: flex; align-items: center; gap: 0.6rem;
   background: var(--bg-color); padding: 0.5rem 1rem; border-radius: var(--radius-md);
 }
+.time-label {
+  font-size: 0.8rem; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.4px; white-space: nowrap;
+}
 .time-input {
-  width: 140px; padding: 0.5rem 0.75rem; border-radius: var(--radius-md);
+  width: 120px; padding: 0.5rem 0.75rem; border-radius: var(--radius-md);
   border: 1.5px solid var(--border-color); outline: none;
   font-family: var(--font-body); font-size: 1.1rem;
   background: var(--surface); color: var(--text-main);
 }
 .time-input:focus { border-color: var(--primary); }
 .set-date-btn { margin-top: 0.75rem; }
-.time-display { font-size: 1.5rem; font-weight: 700; font-family: var(--font-heading); }
+.time-error {
+  font-size: 0.82rem; font-weight: 600; color: var(--primary, #ef4444);
+  background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25);
+  padding: 0.55rem 0.8rem; border-radius: var(--radius-md);
+  margin-top: 0.6rem; line-height: 1.4;
+}
+.time-unit {
+  font-size: 0.95rem; font-weight: 700; color: var(--text-main);
+  white-space: nowrap; margin-left: -0.35rem;
+}
 
 .time-confirmed-badge {
   display: flex;
