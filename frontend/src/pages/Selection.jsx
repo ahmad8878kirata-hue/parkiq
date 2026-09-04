@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useParking } from '../context/ParkingContext';
 import { Clock, Ticket, WarningCircle, MapPin } from '@phosphor-icons/react';
+import { geocodeStationAddress } from '../services/geocodingService';
 import './Selection.css';
 
 const Selection = () => {
@@ -16,16 +17,15 @@ const Selection = () => {
 
     const handleDauerparkticketConfirm = async () => {
         if (stationInput.trim()) {
-            setDauerparkticketStation(stationInput.trim());
             try {
-                const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(stationInput.trim())}&limit=1`);
-                const data = await res.json();
-                if (data.features && data.features.length > 0) {
-                    const coords = [data.features[0].geometry.coordinates[1], data.features[0].geometry.coordinates[0]];
-                    setDauerparkticketStationCoords(coords);
+                const resolved = await geocodeStationAddress(stationInput.trim());
+                setDauerparkticketStation(resolved?.label || stationInput.trim());
+                if (resolved?.coordinates) {
+                    setDauerparkticketStationCoords(resolved.coordinates);
                 }
             } catch (e) {
                 console.error('Failed to geocode station:', e);
+                setDauerparkticketStation(stationInput.trim());
             }
         }
     };
@@ -109,7 +109,7 @@ const Selection = () => {
                                 <div className="station-input-row">
                                     <input
                                         type="text"
-                                        placeholder="Geben Sie Ihren Stationsnamen oder Ihre Adresse ein"
+                                        placeholder="Geben Sie Ihren Stationsnamen oder eine Adresse ein"
                                         value={stationInput}
                                         onChange={(e) => setStationInput(e.target.value)}
                                         onKeyDown={(e) => { if (e.key === 'Enter') handleDauerparkticketConfirm(); }}

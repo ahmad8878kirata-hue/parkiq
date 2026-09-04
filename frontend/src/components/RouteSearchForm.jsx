@@ -1,16 +1,11 @@
 import { useRef, useState } from 'react';
-import { X, MapPin, Train, Bus } from '@phosphor-icons/react';
+import { X, MapPin } from '@phosphor-icons/react';
 import AutocompleteInput from './AutocompleteInput';
 import DateTimePicker from './DateTimePicker';
 import { buildDepartureISO } from '../services/geocodingService';
 
 const TIME_ERROR_MESSAGE =
     'Ungültiges Datum oder ungültige Uhrzeit. Bitte wählen Sie ein Datum und eine Uhrzeit, die nicht in der Vergangenheit liegen.';
-
-const MODE_OPTIONS = [
-    { value: 'train', icon: <Train weight="fill" />, label: 'Bahn' },
-    { value: 'bus', icon: <Bus weight="fill" />, label: 'Bus' }
-];
 
 const RouteSearchForm = ({
     initialStartLocation = '',
@@ -41,7 +36,7 @@ const RouteSearchForm = ({
     const [showCalendar, setShowCalendar] = useState(false);
     const [timeConfirmed, setTimeConfirmed] = useState(false);
     const [timeError, setTimeError] = useState('');
-    const [transportMode, setTransportMode] = useState('train');
+    const [transportMode] = useState('train');
 
     const handleSubmit = () => {
         const iso = buildDepartureISO(year, month, activeDay, time);
@@ -66,25 +61,6 @@ const RouteSearchForm = ({
 
     return (
         <>
-            <div className="mode-selector-wrap">
-                <div className="mode-selector-label">Verkehrsmittel wählen</div>
-                <div className="mode-selector">
-                    {MODE_OPTIONS.map((m) => (
-                        <button
-                            key={m.value}
-                            type="button"
-                            data-mode={m.value}
-                            className={`mode-option ${transportMode === m.value ? 'active' : ''}`}
-                            onClick={() => setTransportMode(m.value)}
-                            aria-pressed={transportMode === m.value}
-                        >
-                            <span className="mode-option-icon">{m.icon}</span>
-                            <span className="mode-option-label">{m.label}</span>
-                        </button>
-                    ))}
-                </div>
-            </div>
-
             <div style={{ marginBottom: '1rem' }}>
                 <AutocompleteInput
                     placeholder="Startpunkt (z. B. Stuttgart Hbf)"

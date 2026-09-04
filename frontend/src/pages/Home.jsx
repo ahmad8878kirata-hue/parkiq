@@ -7,7 +7,7 @@ import './Home.css';
 import './Search.css';
 import './Selection.css';
 import RouteSearchForm from '../components/RouteSearchForm';
-import { resolveCoords, buildDepartureISO } from '../services/geocodingService';
+import { resolveCoords, buildDepartureISO, geocodeStationAddress } from '../services/geocodingService';
 import { createBaseTileLayer, handleMapTileErrors, setMapDarkMode } from '../services/mapTiles';
 import { API_BASE } from '../config';
 
@@ -41,16 +41,15 @@ const Home = () => {
 
     const handleDauerparkticketConfirm = async () => {
         if (stationInput.trim()) {
-            setDauerparkticketStation(stationInput.trim());
             try {
-                const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(stationInput.trim())}&limit=1`);
-                const data = await res.json();
-                if (data.features && data.features.length > 0) {
-                    const coords = [data.features[0].geometry.coordinates[1], data.features[0].geometry.coordinates[0]];
-                    setDauerparkticketStationCoords(coords);
+                const resolved = await geocodeStationAddress(stationInput.trim());
+                setDauerparkticketStation(resolved?.label || stationInput.trim());
+                if (resolved?.coordinates) {
+                    setDauerparkticketStationCoords(resolved.coordinates);
                 }
             } catch (e) {
                 console.error('Failed to geocode station:', e);
+                setDauerparkticketStation(stationInput.trim());
             }
         }
     };
@@ -525,7 +524,7 @@ const Home = () => {
                                             <div className="station-input-row">
                                                 <input
                                                     type="text"
-                                                    placeholder="Geben Sie Ihren Stationsnamen oder Ihre Adresse ein"
+                                                    placeholder="Geben Sie Ihren Stationsnamen oder eine Adresse ein"
                                                     value={stationInput}
                                                     onChange={(e) => setStationInput(e.target.value)}
                                                     onKeyDown={(e) => { if (e.key === 'Enter') handleDauerparkticketConfirm(); }}

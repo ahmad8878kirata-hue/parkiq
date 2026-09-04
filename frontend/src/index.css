@@ -41,6 +41,16 @@
   padding: 0;
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input, textarea, select, [contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+  caret-color: auto;
+  -webkit-touch-callout: default;
 }
 
 html, body {
@@ -57,6 +67,7 @@ body {
   overflow: hidden;
   width: 100vw;
   height: 100dvh;
+  caret-color: transparent;
   transition: background-color 0.4s ease, color 0.4s ease;
 }
 

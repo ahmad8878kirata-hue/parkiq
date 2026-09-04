@@ -26,21 +26,15 @@ const computeArrivalTime = (departureISO, totalMin) => {
     return arr.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 };
 
+const formatTimeWithUhr = (t) => (t ? `${t} Uhr` : t);
+
 const formatJourneyWindow = (departureISO, totalMin) => {
     if (!departureISO || !totalMin) return null;
     const start = new Date(departureISO);
     if (isNaN(start.getTime())) return null;
     const dep = start.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
     const arr = computeArrivalTime(departureISO, totalMin);
-    return arr ? `${dep} – ${arr}` : dep;
-};
-
-const parkingCity = (opt) => {
-    const addr = (opt.address || '').trim();
-    if (!addr) return '';
-    const parts = addr.split(',').map((s) => s.trim()).filter(Boolean);
-    const last = parts[parts.length - 1] || '';
-    return last.replace(/\d{5}/g, '').trim();
+    return arr ? `${formatTimeWithUhr(dep)} – ${formatTimeWithUhr(arr)}` : formatTimeWithUhr(dep);
 };
 
 function getParkingDisplayPricing(opt) {
@@ -211,11 +205,33 @@ const Results = () => {
                         setIsExpanded(true);
                     } else {
                         setIsDirectTransit(false);
+                        const freeFacilityOpt = (() => {
+                            if (!(hasDauerparkticket && dauerparkticketStation)) return null;
+                            const stationName = dauerparkticketStation.toLowerCase();
+                            const stationCoords = dauerparkticketStationCoords;
+                            let textMatch = null;
+                            let nearest = null;
+                            let nearestDist = Infinity;
+                            for (const opt of (json.data || [])) {
+                                const nameLower = (opt.parkingName || '').toLowerCase();
+                                const addrLower = (opt.address || '').toLowerCase();
+                                if (!textMatch && stationName && (nameLower.includes(stationName) || stationName.includes(nameLower) || addrLower.includes(stationName) || stationName.includes(addrLower))) {
+                                    textMatch = opt;
+                                }
+                                if (stationCoords && Number.isFinite(opt.lat) && Number.isFinite(opt.lng)) {
+                                    const d = haversineMeters(stationCoords, [opt.lat, opt.lng]);
+                                    if (d < nearestDist) { nearestDist = d; nearest = opt; }
+                                }
+                            }
+                            if (textMatch) return textMatch;
+                            if (nearest && nearestDist < 800) return nearest;
+                            return null;
+                        })();
                         const enriched = (json.data || []).map((opt, index) => ({
                             ...opt,
                             category: 'Öffentlich',
                             hasTransitDiscount: hasJobTicket,
-                            isDauerparkticketFree: isNearDauerparkticketStation
+                            isDauerparkticketFree: opt === freeFacilityOpt
                         }));
                         setSelectedMode(selectedMode);
                         setRouteOptions(enriched);
@@ -431,10 +447,6 @@ const Results = () => {
         map.fitBounds(bounds, { padding: [50, 100] });
         setIsExpanded(true);
     }, [routeData, isDirectTransit]);
-
-    const handleEmailReservation = (parkingName) => {
-        window.open('https://www.pbw.de/reservieren', '_blank');
-    };
 
     const handleStartNavigation = () => {
         setIsNavigating(true);
@@ -690,9 +702,9 @@ const Results = () => {
                                     {bestCriterion && routeOptions.length > 0 && (
                                         <div className="best-criteria-banner">
                                             <span className="best-criteria-dot" />
-                                            <span className="best-criteria-text">
-                                                <strong>Beste Option</strong> (grün markiert): {bestCriterion}
-                                            </span>
+<span className="best-criteria-text">
+                                                        <strong>Beste Option</strong> (grün markiert)
+                                                    </span>
                                         </div>
                                     )}
                                     {sortedOptions.length === 0 && routeOptions.length > 0 && (
@@ -702,13 +714,14 @@ const Results = () => {
                                         const displayPrice = getParkingDisplayPricing(opt);
                                         const transitFree = opt.hasTransitDiscount;
                                         const dauerparkFree = opt.isDauerparkticketFree;
+                                        const ticketFree = dauerparkFree;
                                         return (
-                                        <div key={idx} className={`option-card ${opt.isBest ? 'best-option-card' : ''} ${transitFree || dauerparkFree ? 'special-card' : ''}`} onClick={() => handleSelectParking(opt)}>
+                                        <div key={idx} className={`option-card ${opt.isBest ? 'best-option-card' : ''} ${ticketFree ? 'special-card' : ''}`} onClick={() => handleSelectParking(opt)}>
                                             <div className="flex-between mb-2">
                                                 <div className="font-bold">{opt.isBest && <span className="best-option-tag"><Check weight="bold" size={11} /> Beste Option</span>}{opt.parkingName}<span className={`category-tag ${opt.category?.toLowerCase() || 'public'}`}>{opt.category || 'Öffentlich'}</span></div>
                                                 <div className="price-container">
-                                                    <div className={`font-bold text-primary ${dauerparkFree ? 'badge-free' : displayPrice.className}`}>
-                                                        {dauerparkFree ? 'Kostenloses Parken' : displayPrice.label}
+                                                    <div className={`font-bold ${ticketFree ? 'badge-free' : displayPrice.className}`}>
+                                                        {ticketFree ? 'Kostenloses Parken' : displayPrice.label}
                                                     </div>
                                                 </div>
                                             </div>
@@ -722,10 +735,10 @@ const Results = () => {
                                                     <span className="occupancy-dot" />
                                                     {getOccupancyMeta(opt).label}
                                                 </div>
-                                                {parkingCity(opt) && (
+                                                {opt.address && (
                                                     <div className="text-xs text-muted mt-1" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                                         <MapPin size={12} />
-                                                        <span style={{ fontWeight: 600 }}>{parkingCity(opt)}</span>
+                                                        <span style={{ fontWeight: 600 }}>{opt.address}</span>
                                                     </div>
                                                 )}
                                             </div>
@@ -759,7 +772,7 @@ const Results = () => {
                                         <h3 className="text-center font-bold text-xl">{routeData.totalTime} Gesamtdauer</h3>
                                         {routeData.timeline && routeData.timeline.length >= 2 && (
                                             <p className="text-center text-sm mb-4" style={{ fontWeight: 600, color: 'var(--text-main)' }}>
-                                                {routeData.timeline[0].time} &ndash; {routeData.timeline[routeData.timeline.length - 1].time}
+                                                {formatTimeWithUhr(routeData.timeline[0].time)} &ndash; {formatTimeWithUhr(routeData.timeline[routeData.timeline.length - 1].time)}
                                             </p>
                                         )}
                                         <p className="text-center text-muted text-sm mb-4">{isDirectTransit
@@ -770,20 +783,20 @@ const Results = () => {
                                                 <div className="badge-transit-free"><Ticket weight="fill" /> Job-Ticket: ÖPNV ist kostenlos</div>
                                             </div>
                                         )}
-                                        {!isDirectTransit && isNearDauerparkticketStation && (
+                                        {!isDirectTransit && selectedParking?.isDauerparkticketFree && (
                                             <div className="text-center mb-2">
                                                 <div className="badge-free-badge"><MapPin weight="fill" /> Dauerparkticket: Kostenlos an {dauerparkticketStation}</div>
                                             </div>
                                         )}
-                                        {!isDirectTransit && hasDauerparkticket && dauerparkticketStation && !isNearDauerparkticketStation && (
+                                        {!isDirectTransit && hasDauerparkticket && dauerparkticketStation && !selectedParking?.isDauerparkticketFree && (
                                             <div className="text-center text-sm mb-2 text-muted">
                                                 <MapPin weight="fill" className="text-primary" /> Dauerparkticket-Station: {dauerparkticketStation}
                                             </div>
                                         )}
                                         {selectedParking && (() => {
                                             const pd = getParkingDisplayPricing(selectedParking);
-                                            if (isNearDauerparkticketStation) {
-                                                return <div className="text-center mb-4"><span className="badge-free-badge">Kostenlos – Dauerparkticket</span></div>;
+                                            if (selectedParking.isDauerparkticketFree) {
+                                                return <div className="text-center mb-4"><span className="badge-free-badge">Kostenloses Parken</span></div>;
                                             }
                                             if (pd.isFree) {
                                                 return <div className="text-center mb-4"><span className="badge-free-badge">{pd.label}</span></div>;
@@ -798,7 +811,7 @@ const Results = () => {
                                     <div className="route-timeline">
                                         {routeData.timeline && routeData.timeline.map((leg, i) => (
                                             <div className="timeline-item" key={i}>
-                                                <div className="time">{leg.time}</div>
+                                                <div className="time">{formatTimeWithUhr(leg.time)}</div>
                                                 <div className="node-col">
                                                     <div className="step-icon">
                                                         {renderIcon(leg.mode)}
@@ -807,48 +820,54 @@ const Results = () => {
                                                     {i !== routeData.timeline.length - 1 && <div className={`line ${leg.mode}-line`}></div>}
                                                 </div>
                                                 <div className="details">
-                                                    <div className="title font-bold">
-                                                        {(leg.name === 'Current Location' || leg.name === 'Mein Standort') ? effectiveStartLocation : leg.name}
-                                                    </div>
-                                                    {leg.city && (
-                                                        <div className="stop-city text-sm text-muted">{leg.city}</div>
-                                                    )}
-                                                    {leg.lineName && (
-                                                        <div className="ride-meta">
-                                                            <span className="line-badge">{leg.lineName}</span>
-                                                            {leg.cancelled && <span className="cancelled-badge">Ausgefallen</span>}
-                                                            {!leg.cancelled && leg.delay > 0 && <span className="delay-badge">+{leg.delay} Min.</span>}
-                                                        </div>
-                                                    )}
-                                                    {leg.estimated && <div className="estimated-note text-sm text-muted">{leg.details}</div>}
-                                                    {leg.transferStops && leg.transferStops.length > 0 && leg.transferStops.map((ts, tIdx) => (
-                                                        <div className="stop-row" key={`ts-${tIdx}`}>
-                                                            <span className="stop-arrow">→</span>
-                                                            <div>
-                                                                <div className="title font-bold">{ts.name}</div>
-                                                                {ts.city && <div className="stop-city text-sm text-muted">{ts.city}</div>}
+                                                    {leg.mode === 'walking' ? (
+                                                        <>
+                                                            {leg.details && <div className="subtitle text-sm text-muted">{leg.details}</div>}
+                                                            {leg.address && <div className="stop-city text-sm text-muted">{leg.address}</div>}
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <div className="title font-bold">
+                                                                {(leg.name === 'Current Location' || leg.name === 'Mein Standort') ? effectiveStartLocation : leg.name}
                                                             </div>
-                                                        </div>
-                                                    ))}
-                                                    {leg.arrivalStop && (
-                                                        <div className="stop-row">
-                                                            <span className="stop-arrow">→</span>
-                                                            <div>
-                                                                <div className="title font-bold">{leg.arrivalStop.name}</div>
-                                                                {leg.arrivalStop.city && <div className="stop-city text-sm text-muted">{leg.arrivalStop.city}</div>}
-                                                            </div>
-                                                        </div>
+                                                            {leg.address && leg.address !== leg.name && (
+                                                                <div className="stop-city text-sm text-muted">{leg.address}</div>
+                                                            )}
+                                                            {leg.lineName && (
+                                                                <div className="ride-meta">
+                                                                    <span className="line-badge">{leg.lineName}</span>
+                                                                    {leg.cancelled && <span className="cancelled-badge">Ausgefallen</span>}
+                                                                    {!leg.cancelled && leg.delay > 0 && <span className="delay-badge">+{leg.delay} Min.</span>}
+                                                                </div>
+                                                            )}
+                                                            {leg.estimated && <div className="estimated-note text-sm text-muted">{leg.details}</div>}
+                                                            {leg.transferStops && leg.transferStops.length > 0 && leg.transferStops.map((ts, tIdx) => (
+                                                                <div className="stop-row" key={`ts-${tIdx}`}>
+                                                                    <span className="stop-arrow">→</span>
+                                                                    <div>
+                                                                        <div className="title font-bold">{ts.name}</div>
+                                                                        {ts.address && <div className="stop-city text-sm text-muted">{ts.address}</div>}
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                            {leg.arrivalStop && (
+                                                                <div className="stop-row">
+                                                                    <span className="stop-arrow">→</span>
+                                                                    <div>
+                                                                        <div className="title font-bold">{leg.arrivalStop.name}</div>
+                                                                        {leg.arrivalStop.address && <div className="stop-city text-sm text-muted">{leg.arrivalStop.address}</div>}
+                                                                    </div>
+                                                                </div>
+                                                            )}
+                                                            {!leg.estimated && leg.details && <div className="subtitle text-sm text-muted">{leg.details}</div>}
+                                                        </>
                                                     )}
-                                                    {!leg.estimated && <div className="subtitle text-sm text-muted">{leg.details}</div>}
                                                 </div>
                                             </div>
                                         ))}
                                     </div>
-                                    {!isDirectTransit && (
-                                        <button className="btn btn-outline w-100 mt-6 mb-2" onClick={() => handleEmailReservation(routeData.parkingName)}>Parkplatz-Details</button>
-                                    )}
-                                    {!isDirectTransit && (
-                                        <a href="https://www.pbw.de/parken/detail/243" target="_blank" rel="noopener noreferrer" className="btn btn-outline w-100 mb-2" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                                    {!isDirectTransit && (selectedParking?.websiteUrl || routeData?.websiteUrl) && (
+                                        <a href={selectedParking?.websiteUrl || routeData?.websiteUrl} target="_blank" rel="noopener noreferrer" className="btn btn-outline w-100 mb-2" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
                                             <ArrowSquareOut weight="bold" /> Objekt-Details ansehen
                                         </a>
                                     )}

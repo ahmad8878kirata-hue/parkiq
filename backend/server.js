@@ -274,6 +274,47 @@ function cityForCoords(lat, lon) {
     return bestCity;
 }
 
+// Build a display label for a transit stop combining the station type and its
+// name, e.g. "U-Bahn-Station Neckartor" or "Haltestelle Schlossplatz". The type
+// is taken from OpenStreetMap tags when available, otherwise guessed from the name.
+function stationLabel(name, type) {
+    const raw = (name || '').trim();
+    const t = String(type || '').toLowerCase();
+    let kind = null;
+    if (t.includes('subway') || t.includes('underground') || /(^|\s)u-?bahn/i.test(raw) || /^u-?\d/.test(raw)) kind = 'U-Bahn-Station';
+    else if (t.includes('s_bahn') || t.includes('s-bahn') || /(^|\s)s-?bahn/i.test(raw) || /^s-?\d/.test(raw)) kind = 'S-Bahn-Station';
+    else if (t.includes('train') || t.includes('station') || t.includes('railway') || /hauptbahnhof/i.test(raw) || /(^|\s)hbf($|\s)/i.test(raw)) kind = 'Bahnhof';
+    else if (t.includes('halt')) kind = 'Haltepunkt';
+    else if (t.includes('bus') || t.includes('platform')) kind = 'Bushaltestelle';
+    else if (t.includes('tram')) kind = 'Haltestelle';
+    return raw ? `${kind ? `${kind} ` : ''}${raw}` : (kind || 'Haltestelle');
+}
+
+// Reverse geocode coordinates to a compact street address line
+// ("Street 12, PLZ City"). Returns '' when no street-level data is available.
+async function reverseGeocodeAddress(lat, lon) {
+    const cacheKey = `addr:${lat.toFixed(5)},${lon.toFixed(5)}`;
+    const cached = geocodeCache.get(cacheKey);
+    if (cached && typeof cached.streetAddress === 'string') return cached.streetAddress;
+    try {
+        const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1&zoom=18`;
+        const res = await rateLimitedNominatim(url);
+        const addr = res.data?.address || {};
+        const road = addr.road || addr.pedestrian || addr.path || addr.square || addr.footway || '';
+        const house = addr.house_number ? `${addr.house_number} ` : '';
+        const city = addr.city || addr.town || addr.village || addr.municipality || addr.county || '';
+        const cityPart = [addr.postcode, city].filter(Boolean).join(' ');
+        const parts = [];
+        if (road) parts.push(`${house}${road}`.trim());
+        if (cityPart) parts.push(cityPart);
+        const streetAddress = parts.join(', ');
+        if (geocodeCache.size < GEOCODE_CACHE_MAX) geocodeCache.set(cacheKey, { streetAddress });
+        return streetAddress;
+    } catch (e) {
+        return '';
+    }
+}
+
 // Normalize a journey's legs into a list of real "rides" (transit legs only),
 // aligned so that the first ride departs at the given anchor date. Walking legs
 // within the journey are ignored for the ride list but their duration is kept
@@ -334,16 +375,18 @@ function buildTransitRides(legInfos, anchorDate) {
 
 // Append one timeline entry per ride plus a transfer entry after every ride that
 // requires changing trains/buses. Falls back to a single clearly-marked
-// "estimated" entry when no real rides are available.
-function appendTransitTimeline(timeline, rides, timeFormatter, firstCity, lastCity, estimatedFallback) {
+// "estimated" entry when no real rides are available. Transit stops are shown
+// with their full station label (type + name) instead of a generic city name;
+// the first and last stop carry a geocoded street address.
+function appendTransitTimeline(timeline, rides, timeFormatter, startStop, endStop, estimatedFallback) {
     if (!rides || rides.length === 0) {
         if (estimatedFallback) {
             timeline.push({
                 time: timeFormatter.format(new Date(estimatedFallback.transitDep)),
                 mode: estimatedFallback.mode,
-                name: estimatedFallback.stopName,
-                city: firstCity || '',
-                arrivalStop: { name: estimatedFallback.destStopName, city: lastCity || '' },
+                name: startStop?.label || stationLabel(estimatedFallback.stopName),
+                address: startStop?.address || '',
+                arrivalStop: { name: endStop?.label || stationLabel(estimatedFallback.destStopName), address: endStop?.address || '' },
                 details: 'Verbindung geschätzt – Echtzeit-Fahrplandaten sind aktuell nicht verfügbar.',
                 durationMin: estimatedFallback.transitMin,
                 estimated: true
@@ -352,21 +395,22 @@ function appendTransitTimeline(timeline, rides, timeFormatter, firstCity, lastCi
         return;
     }
     rides.forEach((ride, i) => {
-        const fromCity = i === 0 ? firstCity || '' : '';
-        const toCity = i === rides.length - 1 ? lastCity || '' : '';
+        const isFirst = i === 0;
+        const isLast = i === rides.length - 1;
         const mode = ride.mode === 'bus' ? 'bus' : 'train';
         const lineLabel = ride.lineName && ride.lineNumber ? `${ride.lineName} ${ride.lineNumber}` : (ride.lineName || 'Zug');
         const directionText = ride.direction ? ` Richtung ${ride.direction}` : '';
+        const fromName = isFirst ? (startStop?.label || stationLabel(ride.from)) : stationLabel(ride.from);
+        const toName = isLast ? (endStop?.label || stationLabel(ride.to)) : stationLabel(ride.to);
         timeline.push({
             time: ride.departure ? timeFormatter.format(new Date(ride.departure)) : '',
             mode,
-            name: ride.from,
-            city: fromCity,
-            lineName: lineLabel,
-            arrivalStop: { name: ride.to, city: toCity },
+            name: fromName,
+            address: isFirst ? (startStop?.address || '') : '',
+            arrivalStop: { name: toName, address: isLast ? (endStop?.address || '') : '' },
             details: ride.cancelled
-                ? `${lineLabel}${directionText} → ${ride.to} – Zug ausgefallen`
-                : `${lineLabel}${directionText} → ${ride.to} · ${ride.durationMin} Min.`,
+                ? `${lineLabel}${directionText} → ${toName} – Zug ausgefallen`
+                : `${lineLabel}${directionText} → ${toName} · ${ride.durationMin} Min.`,
             durationMin: ride.durationMin,
             delay: ride.departureDelay,
             arrivalDelay: ride.arrivalDelay,
@@ -376,8 +420,8 @@ function appendTransitTimeline(timeline, rides, timeFormatter, firstCity, lastCi
             timeline.push({
                 time: ride.arrival ? timeFormatter.format(new Date(ride.arrival)) : '',
                 mode: 'transfer',
-                name: ride.transferStop,
-                city: toCity,
+                name: stationLabel(ride.transferStop),
+                address: '',
                 details: `Umsteigen · Wartezeit ${ride.transferWaitMin} Min.`,
                 durationMin: ride.transferWaitMin,
                 transferWaitMin: ride.transferWaitMin
@@ -1005,7 +1049,7 @@ function findNearestTransitStop(coords, stops, modeKeywords) {
             best = stop;
         }
     }
-    return best ? { name: best.name, coordinates: best.coordinates, distance: Math.round(bestDist) } : null;
+    return best ? { name: best.name, coordinates: best.coordinates, type: best.type || '', distance: Math.round(bestDist) } : null;
 }
 
 // Find top N nearest transit stops by Haversine distance within a walkable radius
@@ -1023,6 +1067,7 @@ function findTopTransitStops(coords, stops, modeKeywords, count = 3, maxDistance
     return scored.slice(0, count).map(s => ({
         name: s.stop.name,
         coordinates: s.stop.coordinates,
+        type: s.stop.type || '',
         distance: Math.round(s.dist)
     }));
 }
@@ -1065,7 +1110,7 @@ async function findNearestTransitStopByWalking(coords, stops, modeKeywords, maxW
         }
     }
     
-    return best ? { name: best.name, coordinates: best.coordinates, distance: Math.round(bestWalkDist) } : null;
+    return best ? { name: best.name, coordinates: best.coordinates, type: best.type || '', distance: Math.round(bestWalkDist) } : null;
 }
 
 // Find a HAFAS station ID for a stop name/coords
@@ -1266,6 +1311,7 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
                         nearStop = {
                             name: stopsTowardDest[i].name,
                             coordinates: stopsTowardDest[i].coordinates,
+                            type: stopsTowardDest[i].type || '',
                             distance: Math.round(walkDist)
                         };
                     }
@@ -1297,6 +1343,7 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
                         nearDestStop = {
                             name: otherDestStops[i].name,
                             coordinates: otherDestStops[i].coordinates,
+                            type: otherDestStops[i].type || '',
                             distance: Math.round(walkDist)
                         };
                     }
@@ -1559,9 +1606,6 @@ async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, d
     const boardTime = new Date(depTime);
     boardTime.setMinutes(boardTime.getMinutes() + walkMin1);
 
-    const fromCity = cityForCoords(fromCoords[0], fromCoords[1]);
-    const toCity = cityForCoords(toCoords[0], toCoords[1]);
-
     const rides = buildTransitRides(legs, boardTime);
     if (rides.length > 0) {
         const ridesTotal = rides.reduce((s, r) => s + r.durationMin + (r.transferWaitMin || 0), 0);
@@ -1570,13 +1614,20 @@ async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, d
     const alightTime = new Date(boardTime);
     alightTime.setMinutes(alightTime.getMinutes() + transitMin);
 
+    const [startAddr, destAddr] = await Promise.all([
+        reverseGeocodeAddress(fromCoords[0], fromCoords[1]),
+        reverseGeocodeAddress(toCoords[0], toCoords[1])
+    ]);
+
     const timeline = [];
+    const fromStopLabel = stationLabel(fromStopName);
+    const toStopLabel = stationLabel(toStopName);
     if (segments[0]?.mode === 'walking') {
-        timeline.push({ time: timeFormatter.format(depTime), mode: 'walking', name: 'Mein Standort', details: `${walkMin1} Min. Fußweg zu ${fromStopName}`, durationMin: walkMin1 });
+        timeline.push({ time: timeFormatter.format(depTime), mode: 'walking', name: 'Mein Standort', address: startAddr, details: `${walkMin1} Min. Fußweg zu ${fromStopLabel}`, durationMin: walkMin1 });
     } else {
-        timeline.push({ time: timeFormatter.format(depTime), mode: 'walking', name: 'Mein Standort', details: `Zu Fuß zur Haltestelle (${walkMin1} Min.)`, durationMin: walkMin1 });
+        timeline.push({ time: timeFormatter.format(depTime), mode: 'walking', name: 'Mein Standort', address: startAddr, details: `Zu Fuß zur Haltestelle (${walkMin1} Min.)`, durationMin: walkMin1 });
     }
-    appendTransitTimeline(timeline, rides, timeFormatter, fromCity, toCity, {
+    appendTransitTimeline(timeline, rides, timeFormatter, { label: fromStopLabel, address: startAddr }, { label: toStopLabel, address: destAddr }, {
         transitDep: boardTime,
         transitMin,
         stopName: fromStopName,
@@ -1584,9 +1635,9 @@ async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, d
         mode: modeKey
     });
     if (segments[segments.length - 1]?.mode === 'walking') {
-        timeline.push({ time: timeFormatter.format(alightTime), mode: 'walking', name: toStopName, city: toCity, details: `Fußweg zum Ziel (${walkMin2} Min.)`, durationMin: walkMin2 });
+        timeline.push({ time: timeFormatter.format(alightTime), mode: 'walking', name: toStopName, details: `Fußweg zum Ziel (${walkMin2} Min.)`, durationMin: walkMin2 });
     }
-    timeline.push({ time: timeFormatter.format(alightTime), mode: 'destination', name: destName, city: toCity, details: 'Ankunft am Ziel', durationMin: 0 });
+    timeline.push({ time: timeFormatter.format(alightTime), mode: 'destination', name: destName, address: destAddr, details: 'Ankunft am Ziel', durationMin: 0 });
 
     return {
         direct: true,
@@ -1791,10 +1842,10 @@ app.post('/api/routes', async (req, res) => {
                 arrTime.setMinutes(arrTime.getMinutes() + totalTimeMinutes);
 
                 const segments = [{ mode: 'driving', path: drivingPath, label: 'Fahrt', durationMin: driveMinutes }];
-                const parkCity = cityForCoords(park.coordinates[0], park.coordinates[1]);
+                const startAddr = await reverseGeocodeAddress(center[0], center[1]);
                 const timeline = [
-                    { time: timeFormatter.format(depTime), mode: 'driving', name: 'Mein Standort', details: 'Fahrt zum Ziel', durationMin: driveMinutes },
-                    { time: timeFormatter.format(arrTime), mode: 'destination', name: park.name, city: parkCity, details: 'Ankunft am Ziel', durationMin: 0 }
+                    { time: timeFormatter.format(depTime), mode: 'driving', name: startAddr || 'Mein Standort', address: startAddr, details: 'Fahrt zum Ziel', durationMin: driveMinutes },
+                    { time: timeFormatter.format(arrTime), mode: 'destination', name: park.name, address: park.address, details: 'Ankunft am Ziel', durationMin: 0 }
                 ];
 
                 clearRouteTimer();
@@ -1842,9 +1893,6 @@ app.post('/api/routes', async (req, res) => {
 
             const departStopCoords = nearStop?.coordinates || park.coordinates;
             const arriveStopCoords = nearDestStop?.coordinates || destCoords;
-            const departCity = cityForCoords(departStopCoords[0], departStopCoords[1]);
-            const arriveCity = cityForCoords(arriveStopCoords[0], arriveStopCoords[1]);
-            const parkCity = cityForCoords(park.coordinates[0], park.coordinates[1]);
             const transitLeg = segments[2]?.legs || [];
 
             const driveMinutes = segments[0]?.durationMin || 15;
@@ -1876,12 +1924,21 @@ app.post('/api/routes', async (req, res) => {
             const destArrive = new Date(transitArr);
             destArrive.setMinutes(destArrive.getMinutes() + walkMin2);
 
+            const [startAddr, departAddr, arriveAddr, destAddr] = await Promise.all([
+                reverseGeocodeAddress(startCoords[0], startCoords[1]),
+                reverseGeocodeAddress(departStopCoords[0], departStopCoords[1]),
+                reverseGeocodeAddress(arriveStopCoords[0], arriveStopCoords[1]),
+                reverseGeocodeAddress(destCoords[0], destCoords[1])
+            ]);
+            const departStopLabel = stationLabel(nearStop?.name || stopName, nearStop?.type);
+            const arriveStopLabel = stationLabel(nearDestStop?.name || destStopName, nearDestStop?.type);
+
             const timeline = [
-                { time: timeFormatter.format(depTime), mode: 'driving', name: 'Mein Standort', details: 'Fahrt zum Parkplatz', durationMin: driveMinutes },
-                { time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, city: parkCity, details: `Parken in ${parkCity}`, durationMin: 0 },
-                { time: timeFormatter.format(transitDep), mode: 'walking', name: stopName, city: departCity, details: `${walkMin1} Min. Fußweg zu ${stopName}`, durationMin: walkMin1 }
+                { time: timeFormatter.format(depTime), mode: 'driving', name: startAddr || 'Mein Standort', address: startAddr, details: 'Fahrt zum Parkplatz', durationMin: driveMinutes },
+                { time: timeFormatter.format(parkArrive), mode: 'parking', name: park.name, address: park.address, details: '', durationMin: 0 },
+                { time: timeFormatter.format(transitDep), mode: 'walking', name: departStopLabel, details: `${walkMin1} Min. Fußweg zu ${departStopLabel}`, durationMin: walkMin1 }
             ];
-            appendTransitTimeline(timeline, rides, timeFormatter, departCity, arriveCity, {
+            appendTransitTimeline(timeline, rides, timeFormatter, { label: departStopLabel, address: departAddr }, { label: arriveStopLabel, address: arriveAddr }, {
                 transitDep,
                 transitMin,
                 stopName,
@@ -1889,8 +1946,8 @@ app.post('/api/routes', async (req, res) => {
                 mode: modeLabel
             });
             timeline.push(
-                { time: timeFormatter.format(destArrive), mode: 'walking', name: destStopName, city: arriveCity, details: `Fußweg zum Ziel (${walkMin2} Min.)`, durationMin: walkMin2 },
-                { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, city: arriveCity, details: 'Ankunft am Ziel', durationMin: 0 }
+                { time: timeFormatter.format(destArrive), mode: 'walking', name: arriveStopLabel, details: `Fußweg zum Ziel (${walkMin2} Min.)`, durationMin: walkMin2 },
+                { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, address: destAddr, details: 'Ankunft am Ziel', durationMin: 0 }
             );
 
             clearRouteTimer(); 
