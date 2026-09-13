@@ -80,6 +80,56 @@ body.dark-mode .mode-tab.active {
 .mode-tab-icon { font-size: 1.1rem; line-height: 1; }
 .mode-tab-label { line-height: 1; }
 
+/* Mode tab icon stacks (car / train / car+train) */
+.mode-icon-stack {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  line-height: 1;
+}
+.mode-icon-stack svg {
+  width: 15px;
+  height: 15px;
+}
+.mode-icon-stack-car-train svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* Recommended badge on the combined travel option */
+.mode-tab.recommended {
+  position: relative;
+}
+.mode-tab .recommended-badge {
+  font-size: 0.5rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: #fff;
+  background: var(--primary);
+  padding: 0.1rem 0.35rem;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+  line-height: 1.2;
+}
+.mode-tab.best-mode .recommended-badge {
+  background: #fff;
+  color: #22c55e;
+}
+
+/* Mode hint shown above the parking list */
+.mode-hint {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: rgba(100, 116, 139, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.9rem;
+  line-height: 1.4;
+}
+
 .filters-scroll {
   position: absolute; top: 4.5rem; left: 0; width: 100%;
   display: flex; overflow-x: auto; gap: 0.5rem;

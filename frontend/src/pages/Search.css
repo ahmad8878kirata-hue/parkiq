@@ -32,6 +32,13 @@
   background: var(--surface); color: var(--text-main);
   margin-bottom: 1rem;
 }
+.start-field-instruction {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-bottom: 0.4rem;
+  line-height: 1.4;
+}
 .search-input-dest {
   border-color: var(--primary-light);
   box-shadow: 0 4px 12px rgba(244, 63, 94, 0.1);
@@ -186,7 +193,7 @@
   z-index: 25; pointer-events: none;
   transition: opacity 0.3s ease;
 }
-.search-sheet-overlay.visible { pointer-events: auto; }
+.search-sheet-overlay.visible { pointer-events: none; }
 .search-sheet {
   position: absolute; bottom: 0; left: 0; right: 0;
   background: var(--surface);
@@ -197,6 +204,7 @@
   animation: slideUp 0.4s cubic-bezier(0.175, 0.885, 0.32, 1) forwards;
   max-height: 85vh;
   overflow-y: auto;
+  pointer-events: auto;
 }
 
 body.dark-mode .search-sheet {

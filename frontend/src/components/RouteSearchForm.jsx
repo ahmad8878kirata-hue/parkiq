@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { X, MapPin } from '@phosphor-icons/react';
+import { X, MapPin, Car, Train } from '@phosphor-icons/react';
 import AutocompleteInput from './AutocompleteInput';
 import DateTimePicker from './DateTimePicker';
 import { buildDepartureISO } from '../services/geocodingService';
@@ -16,14 +16,37 @@ const RouteSearchForm = ({
     onRemoveParking,
     onSubmit,
     loading = false,
+    onFieldFocus,
+    startLocation: controlledStartLocation,
+    onStartLocationChange,
+    startCoords: controlledStartCoords,
+    onStartCoordsChange,
+    destination: controlledDestination,
+    onDestinationChange,
+    destCoords: controlledDestCoords,
+    onDestCoordsChange,
 }) => {
     const startAutocompleteRef = useRef(false);
     const destAutocompleteRef = useRef(false);
 
-    const [startLocation, setStartLocation] = useState(initialStartLocation);
-    const [startCoords, setStartCoords] = useState(initialStartCoords);
-    const [destination, setDestination] = useState(initialDestination);
-    const [destCoords, setDestCoords] = useState(initialDestCoords);
+    const isControlledStart = controlledStartLocation !== undefined;
+    const isControlledDest = controlledDestination !== undefined;
+
+    const [internalStartLocation, setInternalStartLocation] = useState(initialStartLocation);
+    const [internalStartCoords, setInternalStartCoords] = useState(initialStartCoords);
+    const [internalDestination, setInternalDestination] = useState(initialDestination);
+    const [internalDestCoords, setInternalDestCoords] = useState(initialDestCoords);
+
+    const startLocation = isControlledStart ? controlledStartLocation : internalStartLocation;
+    const startCoords = isControlledStart ? (controlledStartCoords ?? internalStartCoords) : internalStartCoords;
+    const destination = isControlledDest ? controlledDestination : internalDestination;
+    const destCoords = isControlledDest ? (controlledDestCoords ?? internalDestCoords) : internalDestCoords;
+
+    const setStartLocation = isControlledStart ? (onStartLocationChange ?? setInternalStartLocation) : setInternalStartLocation;
+    const setStartCoords = isControlledStart ? (onStartCoordsChange ?? setInternalStartCoords) : setInternalStartCoords;
+    const setDestination = isControlledDest ? (onDestinationChange ?? setInternalDestination) : setInternalDestination;
+    const setDestCoords = isControlledDest ? (onDestCoordsChange ?? setInternalDestCoords) : setInternalDestCoords;
+
     const [destError, setDestError] = useState('');
 
     const today = new Date();
@@ -36,7 +59,34 @@ const RouteSearchForm = ({
     const [showCalendar, setShowCalendar] = useState(false);
     const [timeConfirmed, setTimeConfirmed] = useState(false);
     const [timeError, setTimeError] = useState('');
-    const [transportMode] = useState('train');
+    const [transportMode, setTransportMode] = useState('train');
+
+    const TRAVEL_OPTIONS = [
+        {
+            id: 'car',
+            label: 'Auto',
+            hint: 'Direkt mit dem Auto',
+            icon: <Car weight="fill" size={18} color="#64748b" />
+        },
+        {
+            id: 'transit',
+            label: 'ÖPNV',
+            hint: 'Nur mit der Bahn',
+            icon: <Train weight="fill" size={18} color="#0ea5e9" />
+        },
+        {
+            id: 'train',
+            label: 'Auto + Bahn',
+            hint: 'Empfohlen',
+            recommended: true,
+            icon: (
+                <span className="travel-option-icon-stack">
+                    <Car weight="fill" size={16} color="#f43f5e" />
+                    <Train weight="fill" size={16} color="#f43f5e" />
+                </span>
+            )
+        }
+    ];
 
     const handleSubmit = () => {
         const iso = buildDepartureISO(year, month, activeDay, time);
@@ -62,6 +112,7 @@ const RouteSearchForm = ({
     return (
         <>
             <div style={{ marginBottom: '1rem' }}>
+                <div className="start-field-instruction">Tippen Sie auf eine Stelle auf der Karte oder geben Sie Ihre Startadresse ein.</div>
                 <AutocompleteInput
                     placeholder="Startpunkt (z. B. Stuttgart Hbf)"
                     value={startLocation}
@@ -71,6 +122,7 @@ const RouteSearchForm = ({
                         setStartLocation(data.name);
                         startAutocompleteRef.current = true;
                     }}
+                    onFocus={() => onFieldFocus?.('start')}
                     className="search-input"
                 />
                 <AutocompleteInput
@@ -84,9 +136,28 @@ const RouteSearchForm = ({
                         setDestError('');
                     }}
                     autoFocus
+                    onFocus={() => onFieldFocus?.('dest')}
                     className="search-input search-input-dest"
                 />
                 {destError && <div className="dest-error">{destError}</div>}
+            </div>
+
+            <div className="travel-options">
+                <div className="travel-options-title">Reiseoption</div>
+                <div className="travel-options-row">
+                    {TRAVEL_OPTIONS.map(opt => (
+                        <button
+                            key={opt.id}
+                            type="button"
+                            className={`travel-option ${transportMode === opt.id ? 'active' : ''}`}
+                            onClick={() => setTransportMode(opt.id)}
+                        >
+                            <span className={`travel-option-icon ${opt.recommended ? 'recommended' : ''}`}>{opt.icon}</span>
+                            <span className="travel-option-label">{opt.label}</span>
+                            {opt.recommended && <span className="travel-option-recommended">Empfohlen</span>}
+                        </button>
+                    ))}
+                </div>
             </div>
 
             <DateTimePicker

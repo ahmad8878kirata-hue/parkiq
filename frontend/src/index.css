@@ -245,3 +245,101 @@ body.dark-mode input {
 body.dark-mode img[alt="Welcome"] {
     filter: invert(1) hue-rotate(180deg);
 }
+
+/* ===== Travel options (search form) ===== */
+.travel-options {
+    margin-bottom: 1rem;
+}
+.travel-options-title {
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+}
+.travel-options-row {
+    display: flex;
+    gap: 0.5rem;
+}
+.travel-option {
+    position: relative;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.6rem 0.4rem 0.55rem;
+    border-radius: var(--radius-md);
+    border: 1.5px solid var(--border-color);
+    background: var(--surface);
+    cursor: pointer;
+    font-family: var(--font-body);
+    transition: var(--transition);
+}
+.travel-option:hover {
+    border-color: var(--text-light);
+    transform: translateY(-1px);
+}
+.travel-option.active {
+    border-color: var(--primary);
+    background: rgba(244, 63, 94, 0.06);
+    box-shadow: 0 0 0 1px rgba(244, 63, 94, 0.25), var(--shadow-sm);
+}
+.travel-option-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+}
+.travel-option-icon.recommended svg {
+    width: 16px;
+    height: 16px;
+}
+.travel-option-icon-stack {
+    display: inline-flex;
+    align-items: center;
+    gap: 1px;
+}
+.travel-option-icon-stack svg {
+    width: 16px;
+    height: 16px;
+}
+.travel-option-label {
+    font-weight: 700;
+    font-size: 0.78rem;
+    color: var(--text-main);
+    line-height: 1.1;
+    text-align: center;
+}
+.travel-option.active .travel-option-label {
+    color: var(--primary);
+}
+.travel-option-recommended {
+    position: absolute;
+    top: -0.4rem;
+    right: 0.4rem;
+    font-size: 0.55rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: #fff;
+    background: var(--primary);
+    padding: 0.1rem 0.35rem;
+    border-radius: var(--radius-full);
+    white-space: nowrap;
+}
+body.dark-mode .travel-option {
+    background: #1a1a1a;
+    border-color: #262626;
+}
+body.dark-mode .travel-option.active {
+    border-color: var(--primary);
+    background: rgba(244, 63, 94, 0.12);
+}
+body.dark-mode .travel-option .travel-option-label {
+    color: #f1f5f9;
+}
+body.dark-mode .travel-option.active .travel-option-label {
+    color: var(--primary-light);
+}

@@ -1,40 +1,23 @@
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useParking } from '../context/ParkingContext';
 import { Clock, Ticket, WarningCircle, MapPin } from '@phosphor-icons/react';
-import { geocodeStationAddress } from '../services/geocodingService';
+import DauerparkticketSettings from '../components/DauerparkticketSettings';
 import './Selection.css';
 
 const Selection = () => {
     const navigate = useNavigate();
-    const { setParkingType, hasDauerparkticket, setHasDauerparkticket, hasJobTicket, setHasJobTicket, dauerparkticketStation, setDauerparkticketStation, setDauerparkticketStationCoords } = useParking();
-    const [stationInput, setStationInput] = useState('');
+    const { setParkingType, hasDauerparkticket, setHasDauerparkticket, hasJobTicket, setHasJobTicket } = useParking();
 
     const handleSelect = () => {
         setParkingType('kurz');
         navigate('/home');
     };
 
-    const handleDauerparkticketConfirm = async () => {
-        if (stationInput.trim()) {
-            try {
-                const resolved = await geocodeStationAddress(stationInput.trim());
-                setDauerparkticketStation(resolved?.label || stationInput.trim());
-                if (resolved?.coordinates) {
-                    setDauerparkticketStationCoords(resolved.coordinates);
-                }
-            } catch (e) {
-                console.error('Failed to geocode station:', e);
-                setDauerparkticketStation(stationInput.trim());
-            }
-        }
-    };
-
     return (
         <div className="view selection-view">
             <div className="selection-header">
                 <h1 className="logo-text">Park<span>IQ</span></h1>
-                <p className="selection-subtitle">Wählen Sie Ihren Parkart-Typ</p>
+                <p className="selection-subtitle">Wählen Sie Ihre individuellen Einstellungen.</p>
             </div>
 
             <div className="selection-container">
@@ -44,8 +27,8 @@ const Selection = () => {
                     </div>
                     <div className="selection-content">
                         <h3>Kurzzeitparker</h3>
-                        <p>Ideal für Einkäufe, Termine oder kurze Besuche. Es gelten Stundensätze.</p>
-                        <div className="selection-tag">KURZZEIT</div>
+                        <p>Ideal für Einkauf, Termine oder kurze Besuche.</p>
+                        <span className="selection-tag">KURZZEIT</span>
                     </div>
                 </div>
             </div>
@@ -104,25 +87,8 @@ const Selection = () => {
                         </label>
                     </div>
                     {hasDauerparkticket && (
-                        <div className="ticket-badge dauerparkticket-badge">
-                            {!dauerparkticketStation ? (
-                                <div className="station-input-row">
-                                    <input
-                                        type="text"
-                                        placeholder="Geben Sie Ihren Stationsnamen oder eine Adresse ein"
-                                        value={stationInput}
-                                        onChange={(e) => setStationInput(e.target.value)}
-                                        onKeyDown={(e) => { if (e.key === 'Enter') handleDauerparkticketConfirm(); }}
-                                        className="station-input"
-                                        onClick={(e) => e.stopPropagation()}
-                                    />
-                                    <button className="btn btn-sm btn-primary" onClick={(e) => { e.stopPropagation(); handleDauerparkticketConfirm(); }}>Festlegen</button>
-                                </div>
-                            ) : (
-                                <div className="station-confirmed">
-                                    <MapPin weight="fill" /> Station: {dauerparkticketStation}
-                                </div>
-                            )}
+                        <div className="ticket-badge dauerparkticket-badge dauerparkticket-settings-wrap">
+                            <DauerparkticketSettings />
                         </div>
                     )}
                 </div>

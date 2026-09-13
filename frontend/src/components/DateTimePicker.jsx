@@ -67,8 +67,8 @@ const DateTimePicker = ({
                     <div className="time-confirmed-badge">
                         <span className="time-confirmed-label">
                             {activeDay === today.getDate() && month === today.getMonth() && year === today.getFullYear()
-                                ? `Heute, ${time} Uhr`
-                                : `${FULL_MONTH_NAMES[month].slice(0, 3)} ${activeDay}, ${time} Uhr`}
+                                ? `Heute, ${time}`
+                                : `${FULL_MONTH_NAMES[month].slice(0, 3)} ${activeDay}, ${time}`}
                         </span>
                         <button className="time-edit-btn" onClick={() => { onTimeConfirmBadgeShow?.(); openCalendar(); }}>
                             <Pencil weight="bold" size={14} />

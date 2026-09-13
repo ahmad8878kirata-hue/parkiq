@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { API_BASE } from '../config';
+import { formatAddress } from '../services/geocodingService';
 import './AutocompleteInput.css';
 
 const AutocompleteInput = ({
@@ -9,7 +10,9 @@ const AutocompleteInput = ({
     onSelect,
     className = '',
     autoFocus = false,
-    requiredPostalCode = true
+    requiredPostalCode = true,
+    onFocus,
+    onBlur
 }) => {
     const [suggestions, setSuggestions] = useState([]);
     const [showDropdown, setShowDropdown] = useState(false);
@@ -31,7 +34,12 @@ const AutocompleteInput = ({
             if (!res.ok) return;
             const data = await res.json();
             const filtered = requiredPostalCode
-                ? data.filter(item => item.address?.postcode)
+                ? data.filter(item => {
+                    const addr = item.address || {};
+                    if (addr.postcode || addr.road || addr.house_number) return true;
+                    const cat = (item.category || '').toLowerCase();
+                    return ['city', 'town', 'village', 'municipality', 'locality', 'suburb', 'borough', 'district', 'hamlet'].includes(cat);
+                })
                 : data;
             setSuggestions(filtered);
             setShowDropdown(filtered.length > 0);
@@ -50,7 +58,7 @@ const AutocompleteInput = ({
     };
 
     const selectSuggestion = (item) => {
-        const name = item.display_name || item.name || '';
+        const name = formatAddress(item.display_name || item.name || '', item.address);
         const coords = [parseFloat(item.lat), parseFloat(item.lon)];
         const addr = item.address || {};
         const syntheticEvent = { target: { value: name } };
@@ -111,7 +119,8 @@ const AutocompleteInput = ({
                 value={value}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                onFocus={() => { if (suggestions.length > 0) setShowDropdown(true); }}
+                onFocus={() => { if (suggestions.length > 0) setShowDropdown(true); onFocus?.(); }}
+                onBlur={onBlur}
                 className={className}
                 autoFocus={autoFocus}
                 autoComplete="off"

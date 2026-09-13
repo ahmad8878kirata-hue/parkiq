@@ -14,6 +14,28 @@ export async function geocodePhoton(query) {
     return null;
 }
 
+const CITY_KEYS = ['city', 'town', 'village', 'municipality', 'county', 'state_district'];
+
+// Shorten a raw display_name into "[Straße] [Hausnummer], [PLZ] [Stadt]".
+// Falls back to a truncated display_name (max 2 comma-separated parts) when no
+// structured address parts are available.
+export function formatAddress(raw, addr = {}) {
+    const a = addr || {};
+    const road = a.road || a.pedestrian || a.path || a.square || a.footway || '';
+    const house = a.house_number || '';
+    const postcode = a.postcode || '';
+    const city = CITY_KEYS.map(k => a[k]).find(v => v) || '';
+    const streetPart = [road, house].filter(Boolean).join(' ');
+    const cityPart = [postcode, city].filter(Boolean).join(' ');
+    if (streetPart || cityPart) {
+        return [streetPart, cityPart].filter(Boolean).join(', ');
+    }
+    if (raw) {
+        return raw.split(',').map(s => s.trim()).filter(Boolean).slice(0, 2).join(', ');
+    }
+    return '';
+}
+
 // Resolve a location to a precise address line
 // ("[Name], [Straße und Hausnummer], [Postleitzahl] [Stadt]") so the result is
 // never reduced to a bare city name such as "Stuttgart".
@@ -48,6 +70,37 @@ export async function geocodeStationAddress(query) {
         label = [raw || placeName || streetWithHouse, cityPart].filter(Boolean).join(', ');
     }
     return { label, coordinates };
+}
+
+// Geocode a parking-facility address and validate it strictly:
+// a complete address requires a street name AND house number plus a postcode
+// OR city. The returned label is normalized to "Straße Hausnummer, PLZ Stadt".
+export async function geocodeFacilityAddress(query) {
+    const res = await fetch(`${PHOTON_API}?q=${encodeURIComponent(query)}&limit=1`);
+    const data = await res.json();
+    if (!data.features || data.features.length === 0) return null;
+    const f = data.features[0];
+    const p = f.properties || {};
+    const coordinates = [f.geometry.coordinates[1], f.geometry.coordinates[0]];
+    const city = (p.city || p.town || p.village || '').trim();
+    const street = (p.street || '').trim();
+    const house = (p.housenumber || '').trim();
+    const postcode = (p.postcode || '').trim();
+    const isValidAddress = Boolean(street && house && (postcode || city));
+    const streetWithHouse = [street, house].filter(Boolean).join(' ');
+    const cityPart = [postcode, city].filter(Boolean).join(' ');
+    const label = isValidAddress
+        ? [streetWithHouse, cityPart].filter(Boolean).join(', ')
+        : [query.trim(), cityPart].filter(Boolean).join(', ');
+    return {
+        label,
+        coordinates,
+        street,
+        house,
+        postcode,
+        city,
+        isValidAddress,
+    };
 }
 
 export async function resolveCoords({

@@ -7,13 +7,14 @@ import './Home.css';
 import './Search.css';
 import './Selection.css';
 import RouteSearchForm from '../components/RouteSearchForm';
-import { resolveCoords, buildDepartureISO, geocodeStationAddress } from '../services/geocodingService';
+import DauerparkticketSettings from '../components/DauerparkticketSettings';
+import { resolveCoords, buildDepartureISO, formatAddress } from '../services/geocodingService';
 import { createBaseTileLayer, handleMapTileErrors, setMapDarkMode } from '../services/mapTiles';
 import { API_BASE } from '../config';
 
 const Home = () => {
     const navigate = useNavigate();
-    const { parkingType, locationEnabled, hasJobTicket, setHasJobTicket, hasDauerparkticket, setHasDauerparkticket, dauerparkticketStation, setDauerparkticketStation, setDauerparkticketStationCoords, analyticsEnabled, setAnalyticsEnabled } = useParking();
+    const { parkingType, locationEnabled, hasJobTicket, setHasJobTicket, hasDauerparkticket, setHasDauerparkticket, analyticsEnabled, setAnalyticsEnabled } = useParking();
     const mapRef = useRef(null);
     const mapInstance = useRef(null);
     const markerInstance = useRef(null);
@@ -35,24 +36,12 @@ const Home = () => {
     const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
     const [profileModalOpen, setProfileModalOpen] = useState(false);
     const [showSearchSheet, setShowSearchSheet] = useState(false);
-    const [loadingLocation, setLoadingLocation] = useState(false);
-    const [stationInput, setStationInput] = useState('');
-    const [tileOffline, setTileOffline] = useState(false);
+    const activeFieldRef = useRef(null);
 
-    const handleDauerparkticketConfirm = async () => {
-        if (stationInput.trim()) {
-            try {
-                const resolved = await geocodeStationAddress(stationInput.trim());
-                setDauerparkticketStation(resolved?.label || stationInput.trim());
-                if (resolved?.coordinates) {
-                    setDauerparkticketStationCoords(resolved.coordinates);
-                }
-            } catch (e) {
-                console.error('Failed to geocode station:', e);
-                setDauerparkticketStation(stationInput.trim());
-            }
-        }
-    };
+    const openSearchSheet = () => { activeFieldRef.current = null; setShowSearchSheet(true); };
+    const closeSearchSheet = () => { activeFieldRef.current = null; setShowSearchSheet(false); };
+    const [loadingLocation, setLoadingLocation] = useState(false);
+    const [tileOffline, setTileOffline] = useState(false);
 
     const handleSearchSubmit = async (form) => {
         setLoadingLocation(true);
@@ -129,7 +118,7 @@ const Home = () => {
             mapInstance.current.on('click', async (e) => {
                 const { lat, lng } = e.latlng;
 
-                if (isPickingLocationRef.current) {
+                if (activeFieldRef.current === 'start' || isPickingLocationRef.current) {
                     setStartCoords([lat, lng]);
                     markerInstance.current?.setLatLng([lat, lng]);
                     mapInstance.current?.setView([lat, lng], 14, { animate: true });
@@ -140,7 +129,7 @@ const Home = () => {
                         const res = await fetch(`${API_BASE}/api/geocode/reverse?format=json&lat=${lat}&lon=${lng}`);
                         const data = await res.json();
                         if (data && data.display_name) {
-                            const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];
+                            const name = formatAddress(data.display_name, data.address);
                             setLocationStatus(name);
                         } else {
                             setLocationStatus('Eigener Standort');
@@ -155,7 +144,7 @@ const Home = () => {
                         const res = await fetch(`${API_BASE}/api/geocode/reverse?format=json&lat=${lat}&lon=${lng}`);
                         const data = await res.json();
                         if (data && data.display_name) {
-                            const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];
+                            const name = formatAddress(data.display_name, data.address);
                             setDestStatus(name);
                         } else {
                             setDestStatus('Ausgewählter Standort');
@@ -253,7 +242,7 @@ const Home = () => {
                     const res = await fetch(`${API_BASE}/api/geocode/reverse?format=json&lat=${ll[0]}&lon=${ll[1]}`);
                     const data = await res.json();
                     if (data && data.display_name) {
-                        const name = data.address?.road || data.address?.city || data.address?.town || data.display_name.split(',')[0];
+                        const name = formatAddress(data.display_name, data.address);
                         setLocationStatus(name);
                     } else {
                         setLocationStatus('Mein Standort');
@@ -345,9 +334,8 @@ const Home = () => {
             </div>
 
             <div className="top-park-btn-container" style={{ position: 'absolute', top: '5rem', right: '1rem', zIndex: 20 }}>
-                <button className="btn btn-primary shadow-glow" onClick={() => { setShowSearchSheet(true); }} style={{ padding: '0.6rem 1.2rem', borderRadius: '1.5rem 1.5rem 1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.875rem', fontWeight: '600' }}>
-                    <span>Park & Ride</span>
-                    <CaretRight weight="bold" size={28} />
+                <button className="btn btn-primary shadow-glow" onClick={openSearchSheet} style={{ padding: '0.6rem 1.2rem', borderRadius: '1.5rem 1.5rem 1.5rem 0', display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.875rem', fontWeight: '600' }}>
+                    <span>Routenplanung</span><CaretRight weight="bold" size={28} />
                 </button>
                 {destCoords && (
                     <div style={{ fontSize: '0.65rem', color: 'var(--primary)', marginTop: '0.25rem', textAlign: 'right', fontWeight: 500, background: 'rgba(244,63,94,0.1)', borderRadius: '0.5rem', padding: '0.2rem 0.5rem' }}>
@@ -395,7 +383,7 @@ const Home = () => {
                                     </div>
                                 )}
                             </div>
-                            <button className="btn btn-primary w-100 mt-2" onClick={() => { setShowSearchSheet(true); }}>
+                            <button className="btn btn-primary w-100 mt-2" onClick={openSearchSheet}>
                                 <NavigationArrow weight="bold" className="mr-2" /> Route ab hier
                             </button>
                         </div>
@@ -404,7 +392,7 @@ const Home = () => {
             )}
 
             <div className="bottom-controls">
-                <div className="search-container" onClick={() => { setShowSearchSheet(true); }}>
+                <div className="search-container" onClick={openSearchSheet}>
                     <MagnifyingGlass weight="bold" className="search-icon" />
                     <div className="search-text">{destStatus ? destStatus : 'Auf Karte tippen, um Ziel festzulegen'}</div>
                     <button className="mic-btn" onClick={(e) => {
@@ -419,22 +407,27 @@ const Home = () => {
             </div>
 
             {showSearchSheet && (
-                <div className="search-sheet-overlay visible" onClick={() => setShowSearchSheet(false)}>
+                <div className="search-sheet-overlay visible">
                     <div className="search-sheet" onClick={e => e.stopPropagation()}>
                         <div className="sheet-header">
                             <h3>Route</h3>
-                            <button className="icon-btn close-btn" onClick={() => setShowSearchSheet(false)}>
+                            <button className="icon-btn close-btn" onClick={closeSearchSheet}>
                                 <X weight="bold" />
                             </button>
                         </div>
 
                         <RouteSearchForm
-                            initialStartLocation={locationStatus || ''}
-                            initialStartCoords={startCoords}
-                            initialDestination={destStatus || ''}
-                            initialDestCoords={destCoords}
+                            startLocation={locationStatus || ''}
+                            onStartLocationChange={setLocationStatus}
+                            startCoords={startCoords}
+                            onStartCoordsChange={setStartCoords}
+                            destination={destStatus || ''}
+                            onDestinationChange={setDestStatus}
+                            destCoords={destCoords}
+                            onDestCoordsChange={setDestCoords}
+                            onFieldFocus={(field) => { activeFieldRef.current = field; }}
                             selectedParking={selectedParking}
-                            onRemoveParking={() => { setSelectedParking(null); setShowSearchSheet(false); }}
+                            onRemoveParking={() => { setSelectedParking(null); closeSearchSheet(); }}
                             onSubmit={handleSearchSubmit}
                             loading={loadingLocation}
                         />
@@ -519,24 +512,8 @@ const Home = () => {
                                     </label>
                                 </div>
                                 {hasDauerparkticket && (
-                                    <div className="ticket-badge dauerparkticket-badge">
-                                        {!dauerparkticketStation ? (
-                                            <div className="station-input-row">
-                                                <input
-                                                    type="text"
-                                                    placeholder="Geben Sie Ihren Stationsnamen oder eine Adresse ein"
-                                                    value={stationInput}
-                                                    onChange={(e) => setStationInput(e.target.value)}
-                                                    onKeyDown={(e) => { if (e.key === 'Enter') handleDauerparkticketConfirm(); }}
-                                                    className="station-input"
-                                                />
-                                                <button className="btn btn-sm btn-primary" onClick={handleDauerparkticketConfirm}>Festlegen</button>
-                                            </div>
-                                        ) : (
-                                            <div className="station-confirmed">
-                                                <MapPin weight="fill" /> Station: {dauerparkticketStation}
-                                            </div>
-                                        )}
+                                    <div className="ticket-badge dauerparkticket-badge dauerparkticket-settings-wrap">
+                                        <DauerparkticketSettings />
                                     </div>
                                 )}
                             </div>

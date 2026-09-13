@@ -301,11 +301,11 @@ async function reverseGeocodeAddress(lat, lon) {
         const res = await rateLimitedNominatim(url);
         const addr = res.data?.address || {};
         const road = addr.road || addr.pedestrian || addr.path || addr.square || addr.footway || '';
-        const house = addr.house_number ? `${addr.house_number} ` : '';
+        const house = addr.house_number || '';
         const city = addr.city || addr.town || addr.village || addr.municipality || addr.county || '';
         const cityPart = [addr.postcode, city].filter(Boolean).join(' ');
         const parts = [];
-        if (road) parts.push(`${house}${road}`.trim());
+        if (road || house) parts.push(road && house ? `${road} ${house}` : (road || house));
         if (cityPart) parts.push(cityPart);
         const streetAddress = parts.join(', ');
         if (geocodeCache.size < GEOCODE_CACHE_MAX) geocodeCache.set(cacheKey, { streetAddress });
@@ -679,15 +679,15 @@ function getParkingPricing(site) {
     const hasPriceData = site.hasFee === true && extractedPrice !== null;
 
     if (isFree) {
-        return { isFree: true, displayPrice: 'Kostenlos', numericPrice: 0 };
+        return { isFree: true, displayPrice: 'Kostenlos', numericPrice: 0, hourlyRate: 'Kostenlos' };
     }
     if (hasPriceData) {
-        return { isFree: false, displayPrice: extractedPrice, numericPrice: parseFloat(extractedPrice.replace(',', '.').replace(/[^0-9.]/g, '')) || DEFAULT_PARKING_PRICE };
+        return { isFree: false, displayPrice: extractedPrice, numericPrice: parseFloat(extractedPrice.replace(',', '.').replace(/[^0-9.]/g, '')) || DEFAULT_PARKING_PRICE, hourlyRate: DEFAULT_HOURLY_RATE };
     }
     if (site.hasFee === true) {
-        return { isFree: false, displayPrice: DEFAULT_HOURLY_RATE, numericPrice: DEFAULT_PARKING_PRICE };
+        return { isFree: false, displayPrice: DEFAULT_HOURLY_RATE, numericPrice: DEFAULT_PARKING_PRICE, hourlyRate: DEFAULT_HOURLY_RATE };
     }
-    return { isFree: false, displayPrice: DEFAULT_HOURLY_RATE, numericPrice: DEFAULT_PARKING_PRICE };
+    return { isFree: false, displayPrice: DEFAULT_HOURLY_RATE, numericPrice: DEFAULT_PARKING_PRICE, hourlyRate: DEFAULT_HOURLY_RATE };
 }
 
 function estimateParkingPrice(name) {
@@ -747,12 +747,26 @@ function aggregatePricing(lines, rawHasFee) {
 
     const isFree = rawHasFee === false;
     if (isFree) {
-        return { isFree: true, displayPrice: 'Kostenlos', priceDetail: clean, numericPrice: 0, tariffType: 'free', hasFee: false };
+        return { isFree: true, displayPrice: 'Kostenlos', hourlyRate: 'Kostenlos', priceDetail: clean, numericPrice: 0, tariffType: 'free', hasFee: false };
     }
 
     const amountOf = (line) => {
         const m = line.match(/(\d+[.,]\d{2})\s*(€|EUR)/i);
         return m ? parseFloat(m[1].replace(',', '.')) : null;
+    };
+    // Normalize a tariff line to its effective hourly rate. Minute-based
+    // tariffs (e.g. "0,20 € je angefangene 12 Minuten") are converted to the
+    // hourly equivalent (here 1,00 €), hour-based tariffs stay as-is.
+    const hourlyAmountOf = (line) => {
+        const euro = line.match(/(\d+[.,]\d{2})\s*(€|EUR)/i);
+        if (!euro) return null;
+        const price = parseFloat(euro[1].replace(',', '.'));
+        const minute = line.match(/(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:min(?:\.|\b|uten)?)/i);
+        if (minute) {
+            const mins = parseFloat(minute[1].replace(',', '.'));
+            if (isFinite(mins) && mins > 0) return +(price * (60 / mins)).toFixed(2);
+        }
+        return price;
     };
     // Candidates for the base car-parking rate (skip fees/subscriptions).
     const rateLines = clean.filter(l => !PBW_FEE_LINE_RE.test(l));
@@ -762,14 +776,14 @@ function aggregatePricing(lines, rawHasFee) {
     let otherLine = null;
     const pool = rateLines.length > 0 ? rateLines : clean;
     for (const l of pool) {
-        if (/(Minuten?\s|Stunde|Std\.|angefangene)/i.test(l)) { hourlyAmount = hourlyAmount ?? amountOf(l); }
+        if (/(Minuten?\s|Min\.|Stunde|Std\.|angefangene)/i.test(l)) { hourlyAmount = hourlyAmount ?? hourlyAmountOf(l); }
         else if (/(Tageshöchst|höchstsatz|Tag)/i.test(l)) { dailyAmount = dailyAmount ?? amountOf(l); }
         if (!otherLine && amountOf(l) != null) otherLine = l;
     }
     if (pool === clean) {
         // No clear rate lines; re-check without the exclusion to still get something.
         for (const l of clean) {
-            if (/(Minuten?\s|Stunde|Std\.|angefangene)/i.test(l)) { hourlyAmount = hourlyAmount ?? amountOf(l); }
+            if (/(Minuten?\s|Min\.|Stunde|Std\.|angefangene)/i.test(l)) { hourlyAmount = hourlyAmount ?? hourlyAmountOf(l); }
             else if (/(Tageshöchst|höchstsatz|Tag)/i.test(l)) { dailyAmount = dailyAmount ?? amountOf(l); }
         }
     }
@@ -796,7 +810,10 @@ function aggregatePricing(lines, rawHasFee) {
         numericPrice = DEFAULT_PARKING_PRICE;
         tariffType = 'hourly';
     }
-    return { isFree: false, displayPrice, priceDetail: clean, numericPrice, tariffType, hasFee: true };
+    const hourlyRate = hourlyAmount != null && isFinite(hourlyAmount)
+        ? `${fmt(hourlyAmount)} €/Std.`
+        : (dailyAmount != null && isFinite(dailyAmount) ? `${fmt(dailyAmount)} €/Tag` : DEFAULT_HOURLY_RATE);
+    return { isFree: false, displayPrice, hourlyRate, priceDetail: clean, numericPrice, tariffType, hasFee: true };
 }
 
 // Fetch and cache the official price of a parking site from its PBW page.
@@ -1484,9 +1501,10 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
 }
 
 // Build a direct public-transit route from start to destination with NO car
-// segments (walk → transit → walk). Returns null when the destination is too
-// far for the direct connection to make sense.
-async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, date, timeFormatter) {
+// segments (walk - transit - walk). When forceAlways is true (public-transport
+// only mode) the distance/duration limits are skipped so the option is
+// available for every destination, regardless of how far away it is.
+async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, date, timeFormatter, forceAlways = false) {
     let journey = null;
     let estimated = false;
 
@@ -1507,14 +1525,14 @@ async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, d
     if (!journey) {
         // No HAFAS available: fall back to a straight-line distance estimate
         const distKm = distanceMeters(fromCoords, toCoords) / 1000;
-        if (distKm > DIRECT_TRANSIT_MAX_KM) return null;
+        if (!forceAlways && distKm > DIRECT_TRANSIT_MAX_KM) return null;
         const estMin = Math.max(3, Math.round(distKm / 35 * 60));
-        if (estMin >= DIRECT_TRANSIT_MAX_MIN) return null;
+        if (!forceAlways && estMin >= DIRECT_TRANSIT_MAX_MIN) return null;
         journey = { path: interpolatePoints(fromCoords, toCoords, 10), durationMin: estMin, legs: [] };
         estimated = true;
     }
 
-    if (journey.durationMin >= DIRECT_TRANSIT_MAX_MIN) return null;
+    if (!forceAlways && journey.durationMin >= DIRECT_TRANSIT_MAX_MIN) return null;
 
     const legs = journey.legs || [];
     const transitLeg = legs.find(l => l.mode !== 'walking') || {};
@@ -1599,7 +1617,7 @@ async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, d
         });
     }
 
-    const totalMin = Math.min(60, walkMin1 + transitMin + walkMin2);
+    const totalMin = forceAlways ? Math.min(600, walkMin1 + transitMin + walkMin2) : Math.min(60, walkMin1 + transitMin + walkMin2);
 
     // Timeline starts at the requested departure time
     const depTime = new Date(date);
@@ -1653,6 +1671,59 @@ async function buildDirectTransitRoute(client, fromCoords, toCoords, destName, d
         transfers: rides.length > 0 ? rides.length - 1 : 0,
         hasRealtime: rides.some(r => r.departureDelay != null || r.arrivalDelay != null || r.cancelled)
     };
+}
+
+// Build a car-only route: drive from the start address to a parking garage and
+// walk the remaining distance to the destination (no transit legs).
+async function generateCarOnlyRoute(parkCoords, parkName, parkAddress, startCoords, destCoords, destName, date, timeFormatter) {
+    const center = startCoords || [48.7758, 9.1829];
+
+    const drivingResult = await fetchOSRMRoute(center, parkCoords, 'driving');
+    const drivingPath = drivingResult?.path || interpolatePoints(center, parkCoords);
+    const driveMinutes = Math.min(240, drivingResult?.durationMin || Math.max(1, Math.round(distanceMeters(center, parkCoords) / 1000)));
+
+    const walkResult = await fetchOSRMRoute(parkCoords, destCoords, 'walking');
+    const walkPath = walkResult?.path || interpolatePoints(parkCoords, destCoords, 4);
+    const walkDistMeters = walkResult?.pathLength || pathLengthMeters(walkPath) || distanceMeters(parkCoords, destCoords);
+    const walkMinutes = walkResult?.durationMin || Math.max(1, Math.round(walkDistMeters / 80));
+
+    // Connect the walking path to the end of the driving path so the route is seamless
+    if (walkPath.length > 0) {
+        const driveEnd = drivingPath[drivingPath.length - 1];
+        const walkStart = walkPath[0];
+        const gap = distanceMeters(driveEnd, walkStart);
+        if (gap > 3) walkPath.unshift(driveEnd);
+        else walkPath[0] = driveEnd;
+        const lastPt = walkPath[walkPath.length - 1];
+        const destGap = distanceMeters(lastPt, destCoords);
+        if (destGap > 3) walkPath.push(destCoords);
+        else walkPath[walkPath.length - 1] = destCoords;
+    }
+
+    const segments = [
+        { mode: 'driving', path: drivingPath, label: 'Fahrt', durationMin: driveMinutes },
+        { mode: 'walking', path: walkPath, label: 'Fußweg', durationMin: walkMinutes, distanceMeters: Math.round(walkDistMeters) }
+    ];
+
+    const totalTimeMinutes = Math.min(480, driveMinutes + walkMinutes);
+
+    const depTime = new Date(date);
+    const parkArrive = new Date(depTime.getTime() + driveMinutes * 60000);
+    const destArrive = new Date(parkArrive.getTime() + walkMinutes * 60000);
+
+    const [startAddr, destAddr] = await Promise.all([
+        reverseGeocodeAddress(center[0], center[1]),
+        reverseGeocodeAddress(destCoords[0], destCoords[1])
+    ]);
+
+    const timeline = [
+        { time: timeFormatter.format(depTime), mode: 'driving', name: startAddr || 'Mein Standort', address: startAddr, details: 'Fahrt zum Parkplatz', durationMin: driveMinutes },
+        { time: timeFormatter.format(parkArrive), mode: 'parking', name: parkName, address: parkAddress, details: '', durationMin: 0 },
+        { time: timeFormatter.format(destArrive), mode: 'walking', name: parkName, details: `Fußweg zum Ziel (${walkMinutes} Min.)`, durationMin: walkMinutes },
+        { time: timeFormatter.format(destArrive), mode: 'destination', name: destName, address: destAddr, details: 'Ankunft am Ziel', durationMin: 0 }
+    ];
+
+    return { segments, timeline, totalTimeMinutes, driveMinutes, walkMinutes };
 }
 
 app.get('/api/health', (req, res) => {
@@ -1709,7 +1780,7 @@ app.post('/api/routes', async (req, res) => {
             }
         }
 
-        const VALID_MODES = ['train', 'bus', 'transit'];
+        const VALID_MODES = ['train', 'bus', 'transit', 'car'];
         if (transportMode && !VALID_MODES.includes(transportMode)) {
             clearRouteTimer();
             return res.status(400).json({ success: false, message: `Ungültiger Transportmodus. Unterstützt: ${VALID_MODES.join(', ')}.` });
@@ -1746,13 +1817,13 @@ app.post('/api/routes', async (req, res) => {
         }
 
         // ===== Direct transit fallback (no car / no parking needed) =====
-        // If the destination is close enough to reach by public transit directly,
-        // skip the Park & Ride algorithm entirely and show only transit steps.
-        // This runs BEFORE the parking fetches so a short trip never hits them.
-        if (!parkingId && startCoords && destCoords) {
+        // Public-transport-only mode (transit) always uses a direct train route,
+        // for every destination regardless of distance. Car-only mode skips this
+        // branch entirely so it always offers parking garages instead.
+        if (!parkingId && startCoords && destCoords && transportMode !== 'car') {
             const date = startTime ? new Date(startTime) : new Date();
             const timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
-            const directRoute = await buildDirectTransitRoute(client, startCoords, destCoords, destName, date, timeFormatter);
+            const directRoute = await buildDirectTransitRoute(client, startCoords, destCoords, destName, date, timeFormatter, transportMode === 'transit');
             if (timedOut) { clearRouteTimer(); return; }
             if (directRoute) {
                 clearRouteTimer();
@@ -1810,10 +1881,10 @@ app.post('/api/routes', async (req, res) => {
                 }
             }
         } else {
-            // Pre-filter to the 15 closest parking sites to the destination
-            // This dramatically reduces processing time for the listing path
+            // Pre-filter to the closest parking sites to the destination.
+            // Car-only mode shows only the 2-3 garages closest to the destination.
             liveParkings.sort((a, b) => distanceMeters(destCoords, a.coordinates) - distanceMeters(destCoords, b.coordinates));
-            liveParkings = liveParkings.slice(0, 15);
+            liveParkings = liveParkings.slice(0, transportMode === 'car' ? 3 : 15);
         }
 
         if (timedOut) { clearRouteTimer(); return; }
@@ -1828,6 +1899,52 @@ app.post('/api/routes', async (req, res) => {
             const pricing = await fetchPbwPricing(park);
             const occupancy = occupancyStatus(park);
             const parkingPriceNum = parseFloat(pricing.numericPrice.toFixed(2));
+
+            if (transportMode === 'car') {
+                const carRoute = await generateCarOnlyRoute(
+                    park.coordinates, park.name, park.address,
+                    startCoords || [48.7758, 9.1829], destCoords, destName, date, timeFormatter
+                );
+                const totalCost = parkingPriceNum;
+                clearRouteTimer();
+                if (!res.headersSent) {
+                    return res.json({
+                        success: true,
+                        data: [{
+                            id: park.id, parkingName: park.name,
+                            websiteUrl: park.websiteUrl || null,
+                            parkingPrice: parkingPriceNum.toFixed(2),
+                            ticketPrice: '0.00',
+                            totalCost: totalCost.toFixed(2),
+                            totalTime: `${carRoute.totalTimeMinutes} Min.`,
+                            travelDuration: `${carRoute.driveMinutes} Min.`,
+                            walkTime: carRoute.walkMinutes,
+                            walkDistance: `${carRoute.walkMinutes} Min.`,
+                            transitRoute: 'Fahrt',
+                            transitType: 'driving',
+                            segments: carRoute.segments,
+                            timeline: carRoute.timeline,
+                            lat: park.coordinates[0],
+                            lng: park.coordinates[1],
+                            totalCapacity: park.totalCapacity,
+                            freeSpaces: park.freeSpaces,
+                            occupancyRate: park.occupancyRate,
+                            hasRealtime: park.hasRealtime,
+                            occupancy,
+                            amenities: park.amenities,
+                            hasFee: park.hasFee,
+                            feeDescription: park.feeDescription,
+                            description: park.description,
+                            isFree: pricing.isFree,
+                            displayPrice: pricing.isFree ? 'Kostenlos' : pricing.displayPrice,
+                            priceDetail: pricing.priceDetail,
+                            tariffType: pricing.tariffType,
+                            hourlyRate: pricing.isFree ? 'Kostenlos' : (pricing.hourlyRate || pricing.displayPrice)
+                        }]
+                    });
+                }
+                return;
+            }
 
             if (isParkingDestination(park.coordinates, destCoords, park.name, destName)) {
                 const center = startCoords || [48.7758, 9.1829];
@@ -1881,7 +1998,7 @@ app.post('/api/routes', async (req, res) => {
                             displayPrice: pricing.isFree ? 'Kostenlos' : pricing.displayPrice,
                             priceDetail: pricing.priceDetail,
                             tariffType: pricing.tariffType,
-                            hourlyRate: pricing.isFree ? 'Kostenlos' : pricing.displayPrice
+                            hourlyRate: pricing.isFree ? 'Kostenlos' : (pricing.hourlyRate || pricing.displayPrice)
                         }]
                     });
                 }
@@ -1986,7 +2103,7 @@ app.post('/api/routes', async (req, res) => {
                         displayPrice: pricing.isFree ? 'Kostenlos' : pricing.displayPrice,
                         priceDetail: pricing.priceDetail,
                         tariffType: pricing.tariffType,
-                        hourlyRate: pricing.isFree ? 'Kostenlos' : pricing.displayPrice
+                        hourlyRate: pricing.isFree ? 'Kostenlos' : (pricing.hourlyRate || pricing.displayPrice)
                     }]
                 });
             } else {
@@ -2035,6 +2152,10 @@ app.post('/api/routes', async (req, res) => {
             const occupancy = occupancyStatus(park);
             const driveMinutes = Math.min(240, Math.max(1, Math.round(distanceMeters(startCoords || [48.7758, 9.1829], park.coordinates) / 1000)));
 
+            // Car-only mode: walk straight from the garage to the destination
+            const carWalkMeters = Math.round(distanceMeters(park.coordinates, destCoords));
+            const carWalkMinutes = Math.max(1, Math.round(carWalkMeters / 80));
+
             // Find top N stops of each type near the parking
             const nearTrain = findTopTransitStops(park.coordinates, allStops, ['station', 'halt', 'train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'], 3);
             const nearBus = findTopTransitStops(park.coordinates, allStops, ['bus'], 3);
@@ -2077,12 +2198,12 @@ id: park.id, parkingName: park.name,
                             websiteUrl: park.websiteUrl || null,
                 parkingPrice: parkingPrice.toFixed(2),
                 totalCost: totalCost.toFixed(2),
-                totalTime: `${driveMinutes + totalWalkTimeMin + transitTimeEst} Min.`,
-                travelDuration: `${transitTimeEst} Min.`,
-                walkTime: totalWalkTimeMin,
-                walkDistance: `${oneWayWalkMeters}m`,
-                totalWalkEstimate: totalWalkMeters,
-                bestTransitMode: bestMode,
+                totalTime: `${transportMode === 'car' ? driveMinutes + carWalkMinutes : driveMinutes + totalWalkTimeMin + transitTimeEst} Min.`,
+                travelDuration: `${transportMode === 'car' ? carWalkMinutes : transitTimeEst} Min.`,
+                walkTime: transportMode === 'car' ? carWalkMinutes : totalWalkTimeMin,
+                walkDistance: `${transportMode === 'car' ? carWalkMeters : oneWayWalkMeters}m`,
+                totalWalkEstimate: transportMode === 'car' ? carWalkMeters : totalWalkMeters,
+                bestTransitMode: transportMode === 'car' ? 'car' : bestMode,
                 lat: park.coordinates[0],
                 lng: park.coordinates[1],
                 totalCapacity: park.totalCapacity,
@@ -2106,7 +2227,7 @@ id: park.id, parkingName: park.name,
                 displayPrice: pricing.isFree ? 'Kostenlos' : pricing.displayPrice,
                 priceDetail: pricing.priceDetail,
                 tariffType: pricing.tariffType,
-                hourlyRate: pricing.isFree ? 'Kostenlos' : pricing.displayPrice
+                hourlyRate: pricing.isFree ? 'Kostenlos' : (pricing.hourlyRate || pricing.displayPrice)
             });
         }
 
@@ -2120,7 +2241,10 @@ id: park.id, parkingName: park.name,
         // with ties broken by lowest price, then fewest transfers.
         let preparedOptions = allOptions;
         if (transportMode && transportMode !== 'transit') {
-            const modeAvailable = transportMode === 'bus' ? (o) => o.hasBusStop : (o) => o.hasTrainStop;
+            let modeAvailable;
+            if (transportMode === 'car') modeAvailable = () => true;
+            else if (transportMode === 'bus') modeAvailable = (o) => o.hasBusStop;
+            else modeAvailable = (o) => o.hasTrainStop;
             const filtered = allOptions.filter(modeAvailable);
             // Only filter when the chosen mode actually yields connections;
             // otherwise fall back to the full list so the user isn't stuck empty.
@@ -2219,16 +2343,72 @@ app.get('/api/transit-stops', async (req, res) => {
 
 app.get('/api/geocode/search', async (req, res) => {
     try {
-        const { q, limit, countrycodes, addressdetails } = req.query;
+        const { q, limit, countrycodes } = req.query;
         if (!q) return res.status(400).json({ error: 'Missing query parameter q' });
-        const cacheKey = `${q.trim().toLowerCase()}|${limit || 5}|${countrycodes || ''}`;
+        const wanted = Math.min(10, Math.max(1, parseInt(limit, 10) || 5));
+        const cacheKey = `${q.trim().toLowerCase()}|${wanted}|${countrycodes || ''}`;
         if (searchCache.has(cacheKey)) {
             return res.json(searchCache.get(cacheKey));
         }
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=${limit || 5}&addressdetails=${addressdetails || 1}${countrycodes ? `&countrycodes=${countrycodes}` : ''}`;
+
+        // Photon is prefix/autocomplete-oriented, so partial city queries like
+        // "stut" surface "Stuttgart" while full street queries still resolve.
+        const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(q.trim())}&limit=${wanted}&lang=de`;
         const response = await rateLimitedNominatim(url);
-        if (searchCache.size < SEARCH_CACHE_MAX) searchCache.set(cacheKey, response.data);
-        res.json(response.data);
+
+        const wantDe = !countrycodes || countrycodes.toLowerCase().includes('de');
+        const items = [];
+        const seen = new Set();
+        for (const f of response.data?.features || []) {
+            const p = f.properties || {};
+            if (wantDe && p.country && p.country !== 'Germany' && p.country !== 'Deutschland') continue;
+            // Skip bare region/country rows (e.g. "Baden-Württemberg", "Deutschland").
+            if (!p.street && !p.housenumber && ['state', 'country'].includes(p.type)) continue;
+            const city = p.city || p.town || p.village || '';
+            const road = p.street || (['street', 'house'].includes(p.type) ? p.name : '');
+            const house = p.housenumber || '';
+            const postcode = p.postcode || '';
+            const streetPart = [road, house].filter(Boolean).join(' ');
+            const cityPart = [postcode, city].filter(Boolean).join(' ');
+            const parts = [
+                p.name && p.name !== city && p.name !== road ? p.name : null,
+                streetPart || null,
+                cityPart || null,
+                p.state || null,
+                p.country || null,
+            ].filter(Boolean);
+            const displayName = parts.join(', ');
+            const coords = f.geometry?.coordinates || [0, 0];
+            const osmId = p.osm_id != null ? p.osm_id : `photon-${displayName}`;
+            const key = `${p.osm_type || 'N'}:${osmId}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            items.push({
+                place_id: `photon:${osmId}`,
+                osm_type: p.osm_type === 'W' ? 'way' : p.osm_type === 'R' ? 'relation' : 'node',
+                osm_id: osmId,
+                lat: String(coords[1]),
+                lon: String(coords[0]),
+                display_name: displayName,
+                category: p.type || 'address',
+                name: p.name || road || city || '',
+                address: {
+                    road: road || undefined,
+                    house_number: house || undefined,
+                    postcode: postcode || undefined,
+                    city: city || undefined,
+                    town: p.town || undefined,
+                    village: p.village || undefined,
+                    county: p.county || undefined,
+                    state: p.state || undefined,
+                    country: p.country || undefined,
+                },
+            });
+            if (items.length >= wanted) break;
+        }
+
+        if (searchCache.size < SEARCH_CACHE_MAX) searchCache.set(cacheKey, items);
+        res.json(items);
     } catch (err) {
         console.error('Geocode search error:', err.message);
         res.status(502).json({ error: 'Geocoding service unavailable' });
