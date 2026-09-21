@@ -51,7 +51,7 @@ const Onboarding = () => {
             id: 'splash',
             content: (
                 <div className="splash-content" style={{ textAlign: 'center', padding: '2rem' }}>
-                    <img src="/assets/welcome_simple.png" alt="Willkommen" style={{ width: '240px', marginBottom: '2rem', borderRadius: 'var(--radius-lg)' }} />
+                    <img src="/assets/logo.png" alt="ParkIQ Logo" style={{ width: '280px', marginBottom: '1.5rem' }} />
                     <h1 className="logo-text">Park<span>IQ</span></h1>
                     <p className="tagline">Neue smarte Routenplanung</p>
                     <p className="sub-tagline">Es gibt mehrere Wege zum Ziel.</p>

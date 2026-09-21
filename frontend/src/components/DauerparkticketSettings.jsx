@@ -44,8 +44,8 @@ const DauerparkticketSettings = () => {
         setSavingKey(draft.key);
         try {
             const resolved = await geocodeFacilityAddress(raw);
-            if (!resolved || !resolved.isValidAddress) {
-                setErrors(prev => ({ ...prev, [draft.key]: 'Bitte geben Sie eine vollständige Adresse im Format "Straße Hausnummer, PLZ Ort" ein.' }));
+            if (!resolved) {
+                setErrors(prev => ({ ...prev, [draft.key]: 'Parkobjekt konnte nicht gefunden werden. Bitte überprüfen Sie den Namen.' }));
                 return;
             }
             if (draft.facilityId) {
@@ -100,7 +100,7 @@ const DauerparkticketSettings = () => {
                     <input
                         type="text"
                         className="station-input"
-                        placeholder="Keplerstraße 12, 09111 Chemnitz"
+                        placeholder="Name des Parkobjekts eingeben."
                         value={draft.value}
                         onChange={(e) => updateDraft(draft.key, e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter') saveDraft(draft); }}
@@ -129,7 +129,7 @@ const DauerparkticketSettings = () => {
             )}
 
             <p className="address-hint">
-                Format: Straße und Hausnummer, PLZ oder Ort (z.B. Keplerstraße 12, 09111 Chemnitz)
+                Name des Parkobjekts eingeben.
             </p>
         </div>
     );

@@ -3,6 +3,8 @@
 const FALLBACK_STOPS = [
   // ===== S-Bahn Stations (train) =====
   { name: 'Hauptbahnhof (oben)', coordinates: [48.7841, 9.1812], type: 'train s-bahn station' },
+  { name: 'Arnulf-Klett-Platz', coordinates: [48.7836, 9.1814], type: 'train u-bahn station' },
+  { name: 'Jagstfeld Bahnhof 1, Bad Friedrichshall', coordinates: [49.2320, 9.1994], type: 'train s-bahn station' },
   { name: 'Hauptbahnhof (unten)', coordinates: [48.7833, 9.1825], type: 'train s-bahn station' },
   { name: 'Stadtmitte', coordinates: [48.7768, 9.1765], type: 'train s-bahn station' },
   { name: 'Feuersee', coordinates: [48.7739, 9.1668], type: 'train s-bahn station' },

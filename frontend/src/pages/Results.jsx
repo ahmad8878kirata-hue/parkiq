@@ -164,10 +164,15 @@ const Results = () => {
     const evalOptions = routeOptions.length > 0 ? routeOptions : sortedOptions;
     const bestOption = evalOptions.length > 0
         ? (() => {
+            const ticketFree = evalOptions.find(o => o.isDauerparkticketFree);
+            if (ticketFree) return ticketFree;
+
             if (sortBy === 'price') {
-                const ticketFree = evalOptions.find(o => o.isDauerparkticketFree);
-                if (ticketFree) return ticketFree;
-                return [...evalOptions].sort((a, b) => {
+                const minTime = Math.min(...evalOptions.map(o => toMinutes(o.totalTime) || Infinity));
+                const validOptions = evalOptions.filter(o => (toMinutes(o.totalTime) || Infinity) <= Math.max(minTime * 1.5, minTime + 20));
+                const targetOptions = validOptions.length > 0 ? validOptions : evalOptions;
+
+                return [...targetOptions].sort((a, b) => {
                     const ac = parseFloat(a.totalCost) || Infinity;
                     const bc = parseFloat(b.totalCost) || Infinity;
                     if (ac !== bc) return ac - bc;

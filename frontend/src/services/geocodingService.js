@@ -86,11 +86,11 @@ export async function geocodeFacilityAddress(query) {
     const street = (p.street || '').trim();
     const house = (p.housenumber || '').trim();
     const postcode = (p.postcode || '').trim();
-    const isValidAddress = Boolean(street && house && (postcode || city));
+    const isValidAddress = true;
     const streetWithHouse = [street, house].filter(Boolean).join(' ');
     const cityPart = [postcode, city].filter(Boolean).join(' ');
-    const label = isValidAddress
-        ? [streetWithHouse, cityPart].filter(Boolean).join(', ')
+    const label = p.name 
+        ? [p.name, cityPart].filter(Boolean).join(', ')
         : [query.trim(), cityPart].filter(Boolean).join(', ');
     return {
         label,

@@ -945,7 +945,7 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
             if (!bestRawPath) return null;
             const fixedPath = bestRawPath.map(c => [+c[0].toFixed(6), +c[1].toFixed(6)]);
             const path = simplifyPath(fixedPath);
-            const durationMin = Math.max(1, Math.round(bestRoute.duration / 60));
+            const durationMin = profile === 'walking' ? Math.max(1, Math.ceil(bestPathLength / 66)) : Math.max(1, Math.round(bestRoute.duration / 60));
             const result = { path, durationMin, pathLength: Math.round(bestPathLength) };
             setOsrmCache(key, result);
             return result;
@@ -1181,7 +1181,7 @@ async function doHafasJourney(client, fromId, toId, mode, startDate) {
         client.journeys(fromId, toId, {
             results: 3,
             products: mode === 'bus' ? { bus: true, express: false, regional: false, suburban: false, tram: false, ferry: false } : {},
-            walkingSpeed: 'normal',
+            walkingSpeed: 'slow',
             start: startDate ? new Date(startDate) : new Date()
         }),
         10000
@@ -1881,6 +1881,32 @@ app.post('/api/routes', async (req, res) => {
                 }
             }
         } else {
+            // Vector/directional filtering to avoid massive detours and backtracking
+            if (startCoords && destCoords) {
+                const directDist = distanceMeters(startCoords, destCoords);
+                const deg2rad = Math.PI / 180;
+                const latCos = Math.cos(startCoords[0] * deg2rad);
+                const dxDest = (destCoords[1] - startCoords[1]) * latCos;
+                const dyDest = destCoords[0] - startCoords[0];
+
+                liveParkings = liveParkings.filter(p => {
+                    const dxPark = (p.coordinates[1] - startCoords[1]) * latCos;
+                    const dyPark = p.coordinates[0] - startCoords[0];
+                    const dotProduct = (dxDest * dxPark) + (dyDest * dyPark);
+                    
+                    const d1 = distanceMeters(startCoords, p.coordinates);
+                    const d2 = distanceMeters(p.coordinates, destCoords);
+                    
+                    // Disqualify if strictly backtracking and > 2.5km away
+                    const isBacktracking = dotProduct < 0 && d1 > 2500;
+                    
+                    // Disqualify if detour ratio > 1.5 and direct distance > 5km
+                    const isMajorDetour = (d1 + d2) > Math.max(directDist * 1.5, directDist + 5000);
+                    
+                    return !isBacktracking && !isMajorDetour;
+                });
+            }
+
             // Pre-filter to the closest parking sites to the destination.
             // Car-only mode shows only the 2-3 garages closest to the destination.
             liveParkings.sort((a, b) => distanceMeters(destCoords, a.coordinates) - distanceMeters(destCoords, b.coordinates));
