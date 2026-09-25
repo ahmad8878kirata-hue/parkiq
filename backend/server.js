@@ -121,6 +121,91 @@ function transformSite(site) {
     };
 }
 
+// ====== Location-based deduplication ======
+// The same physical parking facility can be published several times (different
+// providers/IDs/operator pages). Normalize the address, then collapse records
+// that point to the same real-world location so each garage is shown once.
+function normalizeAddressForDedupe(addr) {
+    return (addr || '')
+        .toLowerCase()
+        .replace(/straße/g, 'strasse')
+        .replace(/[^a-z0-9]/g, '')
+        .replace(/0\d{4}/g, '');
+}
+
+function addressIsDetailed(addr) {
+    return (addr || '').length >= 4;
+}
+
+// Score how representative a record is of its physical facility (prefer the
+// official PBW page, real fee data and a specific name).
+function siteMergeScore(site) {
+    let score = 0;
+    if (site.websiteUrl) score += 10;
+    if (site.hasFee || site.feeDescription) score += 5;
+    if (site.hasRealtime) score += 3;
+    const rawName = (site.rawName || site.name || '').trim();
+    if (!isGenericParkingName(rawName) && rawName.length > 10) score += 3;
+    if (addressIsDetailed(site.address)) score += 2;
+    if (site.totalCapacity > 0) score += 1;
+    return score;
+}
+
+// Merge the records of one physical facility into a single representative,
+// carrying over the richest pricing metadata available.
+function mergeParkingGroup(group) {
+    if (!group || group.length === 1) return group && group[0];
+    let rep = group[0];
+    let repScore = -Infinity;
+    for (const site of group) {
+        const sc = siteMergeScore(site);
+        if (sc > repScore) { repScore = sc; rep = site; }
+    }
+    const priceSource = group.find(s => s.feeDescription) || rep;
+    return {
+        ...rep,
+        feeDescription: priceSource.feeDescription || rep.feeDescription || null,
+        description: priceSource.description || rep.description || null,
+        mergedFrom: group
+            .map(s => s.id)
+            .filter(id => id != null && id !== rep.id)
+    };
+}
+
+// Deduplicate a list of parking sites by (normalized) address + geocoordinates.
+// Records are grouped when they share a street address and sit within ~200 m, or
+// when they sit within ~50 m (identical physical point). Conservative thresholds
+// avoid merging genuinely separate garages that merely share a post code.
+function dedupeParkingSites(sites) {
+    if (!sites) return sites;
+    if (!Array.isArray(sites) || sites.length < 2) return sites;
+    const ADDR_TOLERANCE_M = 200;
+    const COORD_TOLERANCE_M = 50;
+    const groups = [];
+    for (const site of sites) {
+        const norm = normalizeAddressForDedupe(site.address);
+        let group = null;
+        if (norm && norm.length >= 4 && site.coordinates) {
+            group = groups.find(g =>
+                g.coords && site.coordinates &&
+                g.norm && g.norm === norm &&
+                distanceMeters(g.coords, site.coordinates) <= ADDR_TOLERANCE_M
+            );
+        }
+        if (!group && site.coordinates) {
+            group = groups.find(g =>
+                g.coords && distanceMeters(g.coords, site.coordinates) <= COORD_TOLERANCE_M
+            );
+        }
+        if (group) {
+            group.sites.push(site);
+        } else {
+            groups.push({ norm, coords: site.coordinates, sites: [site] });
+        }
+    }
+    return groups.map(g => mergeParkingGroup(g.sites));
+}
+
 // Cache for reverse geocoding results (coords -> street name)
 const geocodeCache = new Map();
 const GEOCODE_CACHE_MAX = 200;
@@ -216,7 +301,7 @@ function loadDiskCache() {
             const raw = fs.readFileSync(CACHE_FILE, 'utf-8');
             const parsed = JSON.parse(raw);
             if (parsed.data && Array.isArray(parsed.data) && parsed.data.length > 0) {
-                parkingCache.data = parsed.data;
+                parkingCache.data = dedupeParkingSites(parsed.data);
                 parkingCache.lastUpdated = parsed.lastUpdated || Date.now();
                 console.log(`Loaded ${parsed.data.length} parking sites from disk cache`);
                 return true;
@@ -459,7 +544,7 @@ async function fetchAndCacheParking() {
         if (allSites.length > 0) {
             console.log(`Fetched ${allSites.length} parking sites across Baden-Württemberg`);
             
-            parkingCache.data = allSites;
+            parkingCache.data = dedupeParkingSites(allSites);
             parkingCache.lastUpdated = Date.now();
             saveDiskCache();
             
@@ -513,7 +598,7 @@ async function fetchAndCacheParkingStuttgart() {
 
         if (allSites.length > 0) {
             await resolveGenericParkingNames(allSites);
-            parkingCache.data = allSites;
+            parkingCache.data = dedupeParkingSites(allSites);
             parkingCache.lastUpdated = Date.now();
             saveDiskCache();
             console.log(`Fetched ${allSites.length} parking sites from Stuttgart-area fallback`);
@@ -556,7 +641,7 @@ async function fetchParkingNear(lat, lon, radius = 10000, { skipNameResolve = fa
         if (!skipNameResolve) {
             await resolveGenericParkingNames(allSites);
         }
-        return allSites;
+        return dedupeParkingSites(allSites);
     } catch (err) {
         console.error('MobiData BW API Error (fetchParkingNear):', err.message);
         // Fall back to cached data when the API is unavailable
@@ -596,6 +681,134 @@ app.get('/api/parking/bw', async (req, res) => {
     }
 });
 // ====== End MobiData BW ======
+
+// Normalize a parking-facility name for fuzzy matching: lower-case, strip
+// diacritics, drop common generic garage prefixes ("Parkgarage Kurhausgarage"
+// → "kurhausgarage") and collapse punctuation/whitespace.
+function normalizeFacilityName(input) {
+    return String(input || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/^(\s*(parkgarage|parkhaus|tiefgarage|tiefgaragen|garage|parkplatz|parken|park)\b\s*)+/, '')
+        .replace(/[^a-z0-9\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+// Rank a parking candidate against the normalized search query (0..100).
+function scoreFacilityMatch(queryNorm, facilityName, facilityAddress) {
+    const q = queryNorm;
+    if (!q) return 0;
+    const name = normalizeFacilityName(facilityName);
+    const addr = normalizeFacilityName(facilityAddress);
+    if (name === q) return 100;
+    if (name.indexOf(q) === 0) return 92;
+    if (name.indexOf(q) >= 0) return 84;
+    if (addr.indexOf(q) >= 0) return 64;
+
+    const qTokens = q.split(' ').filter(Boolean);
+    if (qTokens.length === 0) return 0;
+    let covered = 0;
+    for (const t of qTokens) {
+        if (name.indexOf(t) >= 0) covered += 2;
+        else if (addr.indexOf(t) >= 0) covered += 1;
+    }
+    return covered ? Math.min(58, 20 + covered * 9) : 0;
+}
+
+// Extra town centres that are outside the BW_CITIES radii (e.g. Baden-Baden,
+// where Kurhausgarage lives) so the name search can still find them live.
+const PARK_SEARCH_CITIES = [
+    { name: 'Baden-Baden', lat: 48.790, lon: 8.194, radius: 18000 },
+    { name: 'Tübingen', lat: 48.5200, lon: 9.0580, radius: 18000 },
+    { name: 'Reutlingen', lat: 48.4916, lon: 9.2144, radius: 18000 },
+    { name: 'Esslingen', lat: 48.7396, lon: 9.3055, radius: 18000 },
+    { name: 'Schwäbisch Hall', lat: 49.1111, lon: 9.7355, radius: 18000 },
+    { name: 'Villingen-Schwenningen', lat: 48.0655, lon: 8.5046, radius: 18000 },
+    { name: 'Ravensburg', lat: 47.7829, lon: 9.6114, radius: 18000 },
+    { name: 'Rottweil', lat: 48.1674, lon: 8.6275, radius: 15000 },
+    { name: 'Konstanz', lat: 47.6609, lon: 9.1758, radius: 15000 },
+    { name: 'Biberach an der Riß', lat: 48.0994, lon: 9.7907, radius: 15000 },
+    { name: 'Singen', lat: 47.7590, lon: 8.8397, radius: 15000 },
+    { name: 'Göppingen', lat: 48.7024, lon: 9.6519, radius: 15000 }
+];
+
+// Search parking facilities by name/address. Local (cached) PBW sites are
+// matched first; when no strong hit exists, the listed extra regions are
+// scanned live from the MobiData ParkAPI because facilities there (e.g. the
+// Baden-Baden Kurhausgarage) are outside the regular BW_CITIES sweep.
+app.get('/api/parking/search', async (req, res) => {
+    const query = String(req.query.q || '').trim();
+    if (!query) return res.json({ success: true, facilities: [] });
+
+    const qNorm = normalizeFacilityName(query);
+    const scored = new Map();
+
+    const toFacilityResult = ({ score, id, name, address, coordinates }) => ({
+        id,
+        name: name || null,
+        address: address || null,
+        label: [name, address].filter(Boolean).join(', '),
+        lat: coordinates[0],
+        lng: coordinates[1],
+        score
+    });
+
+    const addSites = (sites) => {
+        for (const p of (sites || [])) {
+            if (!p.coordinates || !Number.isFinite(p.coordinates[0])) continue;
+            const score = scoreFacilityMatch(qNorm, p.name, p.address);
+            if (score <= 0) continue;
+            const key = p.id != null ? String(p.id) : `${p.coordinates[0]},${p.coordinates[1]}`;
+            const existing = scored.get(key);
+            if (!existing || existing.score < score) {
+                scored.set(key, { score, id: p.id, name: p.name, address: p.address, coordinates: p.coordinates });
+            }
+        }
+    };
+
+    // Collapse facilities that point to the same physical garage (published by
+    // several providers, e.g. "Kurhausgarage" vs "Parkgarage Kurhausgarage").
+    const finalize = (scoredEntries) => {
+        const sorted = [...scoredEntries].sort((a, b) => b.score - a.score || String(a.name || '').localeCompare(String(b.name || '')));
+        const deduped = [];
+        for (const e of sorted) {
+            if (!deduped.some(m => distanceMeters(m.coordinates, e.coordinates) < 150)) deduped.push(e);
+        }
+        return deduped.slice(0, 6).map(toFacilityResult);
+    };
+
+    addSites(parkingCache.data);
+
+    if ([...scored.values()].some(v => v.score >= 80)) {
+        // Strong local hit — no need for a live scan.
+        return res.json({ success: true, query, facilities: finalize(scored.values()) });
+    }
+
+    // Live scan of the extra regions (parallel, bounded timeout). Skipped when a
+    // local candidate already looks reliable.
+    const scanCityLists = [...BW_CITIES, ...PARK_SEARCH_CITIES];
+    const results = await Promise.allSettled(scanCityLists.map(async (city) => {
+        const url = `${MOBIDATA_PARK_API}?lat=${city.lat}&lon=${city.lon}&radius=${city.radius}&limit=${PAGINATION_LIMIT}`;
+        const response = await axios.get(url, {
+            headers: { 'Accept': 'application/json' },
+            timeout: 6000
+        });
+        const items = response.data?.items || [];
+        return items.filter(s => s.purpose === 'CAR');
+    }));
+
+    for (const r of results) {
+        if (r.status === 'fulfilled') {
+            addSites(r.value.map(transformSite));
+        }
+    }
+
+    const facilities = finalize(scored.values());
+
+    res.json({ success: true, query, facilities });
+});
 
 const DIRECT_CITY_PARKING_COST = 18.00;
 const DEFAULT_PARKING_PRICE = 4.00;
@@ -945,13 +1158,33 @@ async function fetchOSRMRoute(from, to, profile = 'driving') {
             if (!bestRawPath) return null;
             const fixedPath = bestRawPath.map(c => [+c[0].toFixed(6), +c[1].toFixed(6)]);
             const path = simplifyPath(fixedPath);
-            const durationMin = profile === 'walking' ? Math.max(1, Math.ceil(bestPathLength / 66)) : Math.max(1, Math.round(bestRoute.duration / 60));
+            const durationMin = profile === 'walking' ? Math.max(1, Math.round(bestPathLength / 80)) : Math.max(1, Math.round(bestRoute.duration / 60));
             const result = { path, durationMin, pathLength: Math.round(bestPathLength) };
             setOsrmCache(key, result);
             return result;
         }
     } catch { }
     return null;
+}
+
+// Walking distance/time estimate for the park->destination leg (or park->stop).
+// Uses the real pedestrian network length from OSRM foot when it is plausible;
+// a detour >1.7x the straight-line distance usually means OSRM snapped to a
+// wrong entry node, so we fall back to a straight-line path with a light
+// network factor. Walking time always uses a standard 80 m/min (4.8 km/h).
+const WALK_NETWORK_FACTOR = 1.35;
+const WALK_DETOUR_LIMIT = 1.7;
+async function estimateWalkMetrics(from, to) {
+    const direct = Math.max(1, distanceMeters(from, to));
+    const foot = await fetchOSRMRoute(from, to, 'walking');
+    const trusted = foot?.pathLength > 0 && foot.pathLength <= direct * WALK_DETOUR_LIMIT;
+    const meters = trusted ? foot.pathLength : Math.round(direct * WALK_NETWORK_FACTOR);
+    const minutes = Math.max(1, Math.round(meters / 80));
+    return {
+        distanceMeters: meters,
+        durationMin: minutes,
+        path: trusted && foot.path ? foot.path : interpolatePoints(from, to, 4)
+    };
 }
 
 // ====== Transit Stops Fetcher ======
@@ -974,11 +1207,11 @@ async function fetchTransitStopsBBox(destCoords, parkings = [], startCoords = nu
         maxLon = Math.max(maxLon, p.coordinates[1]);
     }
 
-    // Clamp the bbox to a maximum of ~0.18 degrees (~20km) from the destination
-    // to avoid pulling in transit stops from irrelevant areas when a parking is far.
-    // The destination is the primary anchor — parkings beyond this radius won't
-    // extend the search area (they are too far to be walkable to a stop anyway).
-    const MAX_BBOX_RADIUS = 0.18;
+    // Clamp the bbox to at most ~0.5 degrees (~55 km) from the destination.
+    // Park & ride hubs can sit far outside the destination centre (origin half
+    // of a long corridor trip), so the window must be wide enough to include
+    // their adjacent stations on BOTH ends of the journey.
+    const MAX_BBOX_RADIUS = 0.5;
     minLat = Math.max(minLat, destCoords[0] - MAX_BBOX_RADIUS);
     maxLat = Math.min(maxLat, destCoords[0] + MAX_BBOX_RADIUS);
     minLon = Math.max(minLon, destCoords[1] - MAX_BBOX_RADIUS);
@@ -1033,7 +1266,9 @@ out body;`;
                     };
                 });
                 // Only append fallback stops if we got actual results from Overpass
-                // (fallback stops are Stuttgart-area only and should not pollute other regions)
+                // (fallback stops only cover the Stuttgart/Karlsruhe/Baden-Baden and
+                // the Heilbronn–Bad Friedrichshall corridors; if Overpass worked we
+                // use its (wider) region-specific results instead).
                 const result = stops.length > 0 ? stops : FALLBACK_STOPS;
                 // Cache the result
                 if (transitStopsCache.size >= TRANSIT_STOPS_CACHE_MAX) {
@@ -1375,20 +1610,18 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
     const destStopName = nearDestStop?.name || 'Zielhaltestelle';
 
     // Segments 2 and 4: walking
-    const wResult = await fetchOSRMRoute(parkCoords, transitFrom, 'walking');
-    const wdResult = await fetchOSRMRoute(transitTo, destCoords, 'walking');
-
     // Segment 2: Walk from parking to transit stop
-    const walkPath = wResult?.path || interpolatePoints(parkCoords, transitFrom, 4);
-    const walkDistMeters = wResult?.pathLength || pathLengthMeters(walkPath) || distanceMeters(parkCoords, transitFrom);
-    const walkMinutes = wResult?.durationMin || Math.max(1, Math.round(walkDistMeters / 80));
+    const wEst = await estimateWalkMetrics(parkCoords, transitFrom);
+    const walkPath = wEst.path;
+    const walkDistMeters = wEst.distanceMeters;
+    const walkMinutes = wEst.durationMin;
     segments.push({
         mode: 'walking',
         path: walkPath,
         label: 'Fußweg',
         durationMin: walkMinutes,
         stopName,
-        distanceMeters: Math.round(walkDistMeters)
+        distanceMeters: walkDistMeters
     });
 
     // Segment 3: Transit from stop to destination area
@@ -1461,9 +1694,10 @@ async function generateRouteWithMode(parkCoords, startCoords, destCoords, destNa
     }
 
     // Segment 4: Walk from dest stop to final destination
-    const walkDestPath = wdResult?.path || interpolatePoints(transitTo, destCoords, 4);
-    const walkDestDistMeters = wdResult?.pathLength || pathLengthMeters(walkDestPath) || distanceMeters(transitTo, destCoords);
-    const walkDestMinutes = wdResult?.durationMin || Math.max(1, Math.round(walkDestDistMeters / 80));
+    const wdEst = await estimateWalkMetrics(transitTo, destCoords);
+    const walkDestPath = wdEst.path;
+    const walkDestDistMeters = wdEst.distanceMeters;
+    const walkDestMinutes = wdEst.durationMin;
     segments.push({
         mode: 'walking',
         path: walkDestPath,
@@ -1682,10 +1916,10 @@ async function generateCarOnlyRoute(parkCoords, parkName, parkAddress, startCoor
     const drivingPath = drivingResult?.path || interpolatePoints(center, parkCoords);
     const driveMinutes = Math.min(240, drivingResult?.durationMin || Math.max(1, Math.round(distanceMeters(center, parkCoords) / 1000)));
 
-    const walkResult = await fetchOSRMRoute(parkCoords, destCoords, 'walking');
-    const walkPath = walkResult?.path || interpolatePoints(parkCoords, destCoords, 4);
-    const walkDistMeters = walkResult?.pathLength || pathLengthMeters(walkPath) || distanceMeters(parkCoords, destCoords);
-    const walkMinutes = walkResult?.durationMin || Math.max(1, Math.round(walkDistMeters / 80));
+    const walkResult = await estimateWalkMetrics(parkCoords, destCoords);
+    const walkPath = walkResult.path;
+    const walkDistMeters = walkResult.distanceMeters;
+    const walkMinutes = walkResult.durationMin;
 
     // Connect the walking path to the end of the driving path so the route is seamless
     if (walkPath.length > 0) {
@@ -1816,15 +2050,20 @@ app.post('/api/routes', async (req, res) => {
                 : estimateDestCoords(destName);
         }
 
-        // ===== Direct transit fallback (no car / no parking needed) =====
-        // Public-transport-only mode (transit) always uses a direct train route,
-        // for every destination regardless of distance. Car-only mode skips this
-        // branch entirely so it always offers parking garages instead.
-        if (!parkingId && startCoords && destCoords && transportMode !== 'car') {
+        // ===== Direct transit (public-transport-only mode) =====
+        // The ÖPNV tab always uses a direct train route. Auto/Bus tabs DO NOT
+        // short-circuit here anymore: they must first evaluate intermodal
+        // options (drive → park → local transit) and only fall back to a pure
+        // route when no parking option at all can be built.
+        const buildDirectTransitFallback = async () => {
             const date = startTime ? new Date(startTime) : new Date();
             const timeFormatter = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
-            const directRoute = await buildDirectTransitRoute(client, startCoords, destCoords, destName, date, timeFormatter, transportMode === 'transit');
-            if (timedOut) { clearRouteTimer(); return; }
+            const directRoute = await buildDirectTransitRoute(client, startCoords, destCoords, destName, date, timeFormatter, false);
+            if (timedOut) { clearRouteTimer(); return null; }
+            return directRoute;
+        };
+        if (!parkingId && startCoords && destCoords && transportMode === 'transit') {
+            const directRoute = await buildDirectTransitFallback();
             if (directRoute) {
                 clearRouteTimer();
                 if (!res.headersSent) return res.json({ success: true, data: [], directTransit: directRoute });
@@ -1834,10 +2073,17 @@ app.post('/api/routes', async (req, res) => {
 
         // Use the comprehensive Baden-Württemberg cache for destination-side parking,
         // and fetch live parking near the user's destination location.
-        // skipNameResolve=true avoids the slow Nominatim rate-limited geocoding
-        let [originParkings, destParkings] = await Promise.all([
-            destCoords ? fetchParkingNear(destCoords[0], destCoords[1], 10000, { skipNameResolve: true }) : Promise.resolve([]),
-            getParkingSites()
+        // skipNameResolve=true avoids the slow Nominatim rate-limited geocoding.
+        // Park & ride modes (Auto + Bahn / Bus) search a broad radius so peripheral
+        // intermodal hubs are discovered; car-only stays tightly destination-bound.
+        const P_R_RADIUS = 25000;
+        const CAR_RADIUS = 10000;
+        let [originParkings, destParkings, startAreaParkings] = await Promise.all([
+            destCoords ? fetchParkingNear(destCoords[0], destCoords[1], transportMode === 'car' ? CAR_RADIUS : P_R_RADIUS, { skipNameResolve: true }) : Promise.resolve([]),
+            getParkingSites(),
+            (transportMode !== 'car' && startCoords)
+                ? fetchParkingNear(startCoords[0], startCoords[1], P_R_RADIUS, { skipNameResolve: true })
+                : Promise.resolve([])
         ]);
 
         if (timedOut) { clearRouteTimer(); return; }
@@ -1846,21 +2092,33 @@ app.post('/api/routes', async (req, res) => {
         if (!originParkings.length && destCoords) {
             originParkings = destParkings;
         }
-        // Merge both sets, deduplicate by id
+        // Merge all sets, deduplicate by id
         const seenIds = new Set();
         let liveParkings = [];
-        for (const p of [...originParkings, ...destParkings]) {
+        for (const p of [...originParkings, ...startAreaParkings, ...destParkings]) {
             if (!seenIds.has(p.id)) {
                 seenIds.add(p.id);
                 liveParkings.push(p);
             }
         }
+        // Second-level dedupe by physical location: the same garage is sometimes
+        // published by different providers with separate IDs (Kurhausgarage case).
+        liveParkings = dedupeParkingSites(liveParkings);
 
         if (!liveParkings.length) {
             loadDiskCache();
             if (parkingCache.data?.length) {
                 liveParkings = parkingCache.data;
-            } else {
+            } else if (startCoords && destCoords && transportMode !== 'car') {
+                // Last resort: no parking data at all available, but we can still
+                // offer a pure public-transport trip instead of failing outright.
+                const directRoute = await buildDirectTransitFallback();
+                if (timedOut) { clearRouteTimer(); return; }
+                if (directRoute) {
+                    clearRouteTimer();
+                    if (!res.headersSent) return res.json({ success: true, data: [], directTransit: directRoute });
+                    return;
+                }
                 clearRouteTimer(); 
                 if (!res.headersSent) return res.status(503).json({ success: false, message: 'Keine Live-Parkplatzdaten in der Nähe des Ziels verfügbar' });
                 return;
@@ -1868,10 +2126,10 @@ app.post('/api/routes', async (req, res) => {
         }
 
         if (parkingId) {
-            liveParkings = liveParkings.filter(p => p.id === parkingId || p.id == parkingId);
+            liveParkings = liveParkings.filter(p => p.id === parkingId || p.id == parkingId || (p.mergedFrom || []).includes(parkingId));
             if (!liveParkings.length) {
                 const cacheSites = await getParkingSites();
-                const cachedPark = cacheSites.find(p => p.id === parkingId || p.id == parkingId);
+                const cachedPark = cacheSites.find(p => p.id === parkingId || p.id == parkingId || (p.mergedFrom || []).includes(parkingId));
                 if (cachedPark) {
                     liveParkings = [cachedPark];
                 } else {
@@ -1907,10 +2165,38 @@ app.post('/api/routes', async (req, res) => {
                 });
             }
 
-            // Pre-filter to the closest parking sites to the destination.
-            // Car-only mode shows only the 2-3 garages closest to the destination.
-            liveParkings.sort((a, b) => distanceMeters(destCoords, a.coordinates) - distanceMeters(destCoords, b.coordinates));
-            liveParkings = liveParkings.slice(0, transportMode === 'car' ? 3 : 15);
+// Pool the candidates per travel mode.
+            if (transportMode === 'car') {
+                // Car only: the garages closest to the destination address.
+                liveParkings.sort((a, b) => distanceMeters(destCoords, a.coordinates) - distanceMeters(destCoords, b.coordinates));
+                liveParkings = liveParkings.slice(0, 3);
+            } else {
+                // Park & ride: unified candidate pool across ALL three zones —
+                // origin (short drive, long transit leg), corridor/hub (drive most
+                // of the way, short transit leg) and destination area (walk or a
+                // final short connection). Any facility is a valid transfer point
+                // when the driving leg is feasible: within ~90 km of the start,
+                // close enough for a last leg, and (via the vector filter above)
+                // not an absurd detour or backtrack.
+                const P_R_MAX_DRIVE_KM = 90;
+                const P_R_MAX_POOL = 80;
+                const sc = startCoords ? [startCoords[0], startCoords[1]] : [48.7758, 9.1829];
+                const dc = destCoords ? [destCoords[0], destCoords[1]] : sc;
+                const df = (a, b) => distanceMeters(a, b) / 1000;
+                liveParkings = liveParkings
+                    .filter(p => {
+                        const d1 = df(sc, p.coordinates);
+                        const d2 = df(dc, p.coordinates);
+                        return d1 <= P_R_MAX_DRIVE_KM && d2 <= P_R_MAX_DRIVE_KM;
+                    })
+                    // Coverage-neutral order (closest to start or dest first) so
+                    // the cap keeps a genuine mix of origin, corridor and
+                    // destination candidates instead of a single-city clump.
+                    .sort((a, b) =>
+                        Math.min(df(sc, a.coordinates), df(dc, a.coordinates))
+                        - Math.min(df(sc, b.coordinates), df(dc, b.coordinates)))
+                    .slice(0, P_R_MAX_POOL);
+            }
         }
 
         if (timedOut) { clearRouteTimer(); return; }
@@ -1972,7 +2258,10 @@ app.post('/api/routes', async (req, res) => {
                 return;
             }
 
-            if (isParkingDestination(park.coordinates, destCoords, park.name, destName)) {
+            // A garage sitting right at the destination makes a pure-drive route, which
+            // is only the desired behaviour for car-only mode. Auto + Bahn / Bus must
+            // always produce the multi-modal itinerary (drive → park → transit → walk).
+            if (transportMode === 'car' && isParkingDestination(park.coordinates, destCoords, park.name, destName)) {
                 const center = startCoords || [48.7758, 9.1829];
                 const dr = await fetchOSRMRoute(center, park.coordinates, 'driving');
                 const drivingPath = dr?.path || interpolatePoints(center, park.coordinates);
@@ -2167,8 +2456,18 @@ app.post('/api/routes', async (req, res) => {
 
         // Fetch official pricing for every candidate site (in parallel, cached).
         const pricingMap = new Map();
+        const carMetricsMap = new Map();
+        const defaultStart = [48.7758, 9.1829];
         await Promise.all(liveParkings.map(async (park) => {
             pricingMap.set(park.id, await fetchPbwPricing(park));
+            // Car-only candidate: compute the SAME driving+walking numbers the
+            // detail view will produce, so card, sort and detail always agree.
+            if (transportMode === 'car') {
+                const dr = await fetchOSRMRoute(startCoords || defaultStart, park.coordinates, 'driving');
+                const driveMinutes = Math.min(240, dr?.durationMin || Math.max(1, Math.round(distanceMeters(startCoords || defaultStart, park.coordinates) / 1000)));
+                const walk = await estimateWalkMetrics(park.coordinates, destCoords);
+                carMetricsMap.set(park.id, { driveMinutes, walkMinutes: walk.durationMin, walkMeters: walk.distanceMeters });
+            }
         }));
 
         for (const park of liveParkings) {
@@ -2176,11 +2475,15 @@ app.post('/api/routes', async (req, res) => {
             const parkingPrice = pricing.numericPrice;
             const totalCost = parseFloat(parkingPrice.toFixed(2));
             const occupancy = occupancyStatus(park);
-            const driveMinutes = Math.min(240, Math.max(1, Math.round(distanceMeters(startCoords || [48.7758, 9.1829], park.coordinates) / 1000)));
+            const carMetrics = carMetricsMap.get(park.id);
+            const driveMinutes = carMetrics
+                ? carMetrics.driveMinutes
+                : Math.min(240, Math.max(1, Math.round(distanceMeters(startCoords || defaultStart, park.coordinates) / 1000)));
 
-            // Car-only mode: walk straight from the garage to the destination
-            const carWalkMeters = Math.round(distanceMeters(park.coordinates, destCoords));
-            const carWalkMinutes = Math.max(1, Math.round(carWalkMeters / 80));
+            // Car-only mode: walk from the garage to the destination (same numbers
+            // as the detail view via estimateWalkMetrics).
+            const carWalkMeters = carMetrics ? carMetrics.walkMeters : Math.round(distanceMeters(park.coordinates, destCoords));
+            const carWalkMinutes = carMetrics ? carMetrics.walkMinutes : Math.max(1, Math.round(carWalkMeters / 80));
 
             // Find top N stops of each type near the parking
             const nearTrain = findTopTransitStops(park.coordinates, allStops, ['station', 'halt', 'train', 'rail', 'metro', 'bahn', 's-bahn', 'u-bahn'], 3);
@@ -2193,9 +2496,10 @@ app.post('/api/routes', async (req, res) => {
             const busTotalWalk = bestPairWalk(nearBus, destTopBus);
             const bestTotalWalk = Math.min(trainTotalWalk, busTotalWalk);
 
-            // Determine which mode gives the shortest walk
+            // Determine which mode gives the shortest walk (train wins ties: the app's
+            // primary P&R mode, and both-9999 means no bus data rather than "no train").
             let bestMode = 'train';
-            if (busTotalWalk <= trainTotalWalk) bestMode = 'bus';
+            if (busTotalWalk < trainTotalWalk) bestMode = 'bus';
 
             const hasTrain = nearTrain.length > 0 && nearTrain[0].distance < MAX_WALK_PER_SEGMENT;
             const hasBus = nearBus.length > 0 && nearBus[0].distance < MAX_WALK_PER_SEGMENT;
@@ -2214,18 +2518,64 @@ app.post('/api/routes', async (req, res) => {
             } else if (bestMode === 'train' && nearTrain.length > 0 && destTopTrain.length > 0) {
                 const distKm = distanceMeters(nearTrain[0].coordinates, destTopTrain[0].coordinates) / 1000;
                 transitTimeEst = Math.max(2, Math.round(distKm / 60 * 60));
+            } else if (bestMode === 'train' && nearTrain.length > 0 && nearTrain[0].distance < MAX_WALK_PER_SEGMENT * 2) {
+                // No destination-area stop known: estimate the train leg from the
+                // boarded stop to the destination itself so the card matches the
+                // detailed route instead of falling back to a flat 20 min.
+                transitTimeEst = Math.max(20, Math.min(90, Math.round(distanceMeters(nearTrain[0].coordinates, destCoords) / 1000)));
+            } else if (bestMode === 'bus' && nearBus.length > 0 && nearBus[0].distance < MAX_WALK_PER_SEGMENT * 2) {
+                transitTimeEst = Math.max(20, Math.min(90, Math.round(distanceMeters(nearBus[0].coordinates, destCoords) / 1000 * 2)));
             }
 
             const distToDest = distanceMeters(destCoords, park.coordinates);
+
+            // P+R ranking: how well this site works as a car→transit transfer hub, with
+                // lowest TOTAL journey time as the primary criterion (drive + walks
+                // + transit). A hub with a walkable boarding stop and a REAL transit
+                // leg to the destination gets a bonus, but it is capped so origin
+                // spill-over doesn't starve corridor hubs on long trips.
+            let pandrScore = -1;
+            let transitLegMinutes = 0;
+            if (transportMode !== 'car') {
+                const modeNear = bestMode === 'bus' ? nearBus : nearTrain;
+                const modeDest = bestMode === 'bus' ? destTopBus : destTopTrain;
+                const hubWalkMeters = modeNear[0]?.distance;
+                if (hubWalkMeters != null && hubWalkMeters < MAX_WALK_PER_SEGMENT && modeDest.length > 0) {
+                    const legKm = distanceMeters(modeNear[0].coordinates, modeDest[0].coordinates) / 1000;
+                    const speedKmh = bestMode === 'bus' ? 30 : 60;
+                    transitLegMinutes = Math.max(2, Math.round(legKm / speedKmh * 60));
+                    // Upstream bonus: a hub close to the departure point shortens the
+                    // driving leg, so it beats waiting until right next to the destination.
+                    let originBonus = 0;
+                    if (startCoords) {
+                        const startKm = distanceMeters(startCoords, park.coordinates) / 1000;
+                        if (startKm <= 5) originBonus = 5;
+                        else if (startKm <= 10) originBonus = 3;
+                        else if (startKm <= 20) originBonus = 1;
+                    }
+                    const journeyEstMin = driveMinutes + totalWalkTimeMin + transitTimeEst;
+                    pandrScore = -journeyEstMin
+                        + Math.min(transitLegMinutes * 10, 60)
+                        - (hubWalkMeters / 80) * 0.5
+                        + originBonus
+                        + (bestMode === 'train' ? 5 : 0);
+                } else if (modeNear.length === 0) {
+                    // No viable transit stop nearby: only usable as a fallback.
+                    pandrScore = -(distToDest / 1000);
+                }
+            }
+
             allOptions.push({
                 distanceToDest: distToDest,
+                pandrScore,
+                transitLegMinutes,
 id: park.id, parkingName: park.name,
                             address: park.address,
                             websiteUrl: park.websiteUrl || null,
                 parkingPrice: parkingPrice.toFixed(2),
                 totalCost: totalCost.toFixed(2),
                 totalTime: `${transportMode === 'car' ? driveMinutes + carWalkMinutes : driveMinutes + totalWalkTimeMin + transitTimeEst} Min.`,
-                travelDuration: `${transportMode === 'car' ? carWalkMinutes : transitTimeEst} Min.`,
+                travelDuration: `${transportMode === 'car' ? driveMinutes : transitTimeEst} Min.`,
                 walkTime: transportMode === 'car' ? carWalkMinutes : totalWalkTimeMin,
                 walkDistance: `${transportMode === 'car' ? carWalkMeters : oneWayWalkMeters}m`,
                 totalWalkEstimate: transportMode === 'car' ? carWalkMeters : totalWalkMeters,
@@ -2270,29 +2620,52 @@ id: park.id, parkingName: park.name,
             let modeAvailable;
             if (transportMode === 'car') modeAvailable = () => true;
             else if (transportMode === 'bus') modeAvailable = (o) => o.hasBusStop;
-            else modeAvailable = (o) => o.hasTrainStop;
+            // Auto + Bahn: a walkable railway station is preferred, but a short
+            // local bus/tram leg from the parking facility to the destination is
+            // also valid, so destination-area garages stay in the list.
+            else modeAvailable = (o) => o.hasTrainStop || o.hasBusStop;
             const filtered = allOptions.filter(modeAvailable);
             // Only filter when the chosen mode actually yields connections;
             // otherwise fall back to the full list so the user isn't stuck empty.
             if (filtered.length > 0) preparedOptions = filtered;
         }
 
-        const bestCriterion = 'Kürzeste Gesamtdauer (bei Gleichstand: günstigster Preis, dann wenigste Umstiege)';
+        const bestCriterion = transportMode === 'car'
+            ? 'Kürzeste Gesamtdauer (bei Gleichstand: günstigster Preis, dann wenigste Umstiege)'
+            : 'Bestes Park-&-Ride-Angebot (echte Bahnverbindung, gut erreichbare Haltestelle, kürzeste Gesamtfahrt)';
         preparedOptions.forEach((o) => {
             o.isBest = false;
             o.bestCriterion = bestCriterion;
         });
         if (preparedOptions.length > 0) {
-            // Shortest total journey duration, then lowest cost, then fewest transfers.
-            preparedOptions.sort((a, b) => {
-                const aMins = parseInt(a.totalTime) || 999999;
-                const bMins = parseInt(b.totalTime) || 999999;
-                if (aMins !== bMins) return aMins - bMins;
-                const aCost = parseFloat(a.totalCost) || 0;
-                const bCost = parseFloat(b.totalCost) || 0;
-                if (aCost !== bCost) return aCost - bCost;
-                return (a.transfers || 0) - (b.transfers || 0);
-            });
+            if (transportMode !== 'car') {
+                // Park & ride: rank intermodal hubs first — a walkable boarding stop
+                // with a real transit leg, peripheral to the destination (upstream).
+                preparedOptions.sort((a, b) => {
+                    const aScore = a.pandrScore ?? -1;
+                    const bScore = b.pandrScore ?? -1;
+                    if ((aScore >= 0) !== (bScore >= 0)) return aScore >= 0 ? -1 : 1;
+                    if (aScore !== bScore) return bScore - aScore;
+                    const aMins = parseInt(a.totalTime) || 999999;
+                    const bMins = parseInt(b.totalTime) || 999999;
+                    if (aMins !== bMins) return aMins - bMins;
+                    const aCost = parseFloat(a.totalCost) || 0;
+                    const bCost = parseFloat(b.totalCost) || 0;
+                    if (aCost !== bCost) return aCost - bCost;
+                    return (a.transfers || 0) - (b.transfers || 0);
+                });
+            } else {
+                // Shortest total journey duration, then lowest cost, then fewest transfers.
+                preparedOptions.sort((a, b) => {
+                    const aMins = parseInt(a.totalTime) || 999999;
+                    const bMins = parseInt(b.totalTime) || 999999;
+                    if (aMins !== bMins) return aMins - bMins;
+                    const aCost = parseFloat(a.totalCost) || 0;
+                    const bCost = parseFloat(b.totalCost) || 0;
+                    if (aCost !== bCost) return aCost - bCost;
+                    return (a.transfers || 0) - (b.transfers || 0);
+                });
+            }
             preparedOptions[0].isBest = true;
         }
 

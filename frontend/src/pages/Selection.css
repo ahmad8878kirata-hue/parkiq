@@ -297,6 +297,105 @@ body.dark-mode .ticket-option {
     font-weight: 500;
 }
 
+.facility-autocomplete {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+}
+
+.facility-search-spinner {
+    position: absolute;
+    right: 0.6rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-light);
+    animation: spin 1s linear infinite;
+}
+
+.facility-suggestions {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    list-style: none;
+    margin: 0;
+    padding: 0.25rem;
+    background: var(--surface, #fff);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.facility-suggestion {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.45rem 0.5rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.facility-suggestion.active,
+.facility-suggestion:hover {
+    background: var(--bg-hover, rgba(74, 144, 226, 0.12));
+}
+
+.facility-suggestion.muted {
+    color: var(--text-light);
+    cursor: default;
+    font-size: 0.75rem;
+}
+
+.facility-suggestion-icon {
+    color: var(--secondary);
+    margin-top: 2px;
+}
+
+.facility-suggestion-line {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+}
+
+.facility-suggestion-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-main);
+    overflow-wrap: anywhere;
+}
+
+.facility-suggestion-sub {
+    font-size: 0.7rem;
+    color: var(--text-light);
+    overflow-wrap: anywhere;
+}
+
+.facility-suggestion-apply {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--primary);
+    border-radius: var(--radius-sm);
+    background: rgba(74, 144, 226, 0.1);
+    color: var(--primary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.facility-suggestion-apply:hover {
+    background: rgba(74, 144, 226, 0.18);
+}
+
 .address-hint {
     color: var(--text-muted);
     font-size: 0.7rem;

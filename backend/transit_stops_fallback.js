@@ -42,6 +42,46 @@ const FALLBACK_STOPS = [
   { name: 'Obertürkheim', coordinates: [48.7643, 9.2696], type: 'bus stop' },
   { name: 'Münster', coordinates: [48.8097, 9.2224], type: 'bus stop' },
   { name: 'Hofen', coordinates: [48.8191, 9.2331], type: 'bus stop' },
+
+  // ===== Karlsruhe (train / tram) =====
+  { name: 'Karlsruhe Hauptbahnhof', coordinates: [49.0036, 8.4034], type: 'train station' },
+  { name: 'Karlsruhe-Durlach', coordinates: [48.9984, 8.4690], type: 'train station' },
+  { name: 'Karlsruhe Marktplatz', coordinates: [49.0087, 8.3975], type: 'train station' },
+  { name: 'Karlsruhe Mühlburger Tor', coordinates: [49.0147, 8.3865], type: 'train station' },
+  { name: 'Karlsruhe Schloss', coordinates: [49.0126, 8.4035], type: 'train station' },
+
+  // ===== Baden-Baden corridor (train / bus) =====
+  { name: 'Rastatt', coordinates: [48.8803, 8.2140], type: 'train station' },
+  { name: 'Kuppenheim', coordinates: [48.8294, 8.2549], type: 'train station' },
+  { name: 'Baden-Baden Hauptbahnhof', coordinates: [48.7902, 8.1919], type: 'train station' },
+  { name: 'Baden-Baden Rebland', coordinates: [48.8097, 8.1666], type: 'train station' },
+  { name: 'Baden-Baden Stadtwerke', coordinates: [48.7847, 8.1831], type: 'train halt' },
+  { name: 'Baden-Baden Leopoldsplatz', coordinates: [48.7604, 8.2339], type: 'bus stop' },
+  { name: 'Baden-Baden Augustaplatz', coordinates: [48.7586, 8.2382], type: 'bus stop' },
+  { name: 'Baden-Baden Hauptbahnhof (Bus)', coordinates: [48.7905, 8.1915], type: 'bus station' },
+
+  // ===== Stuttgart – Bad Friedrichshall corridor (train / bus) =====
+  { name: 'Ludwigsburg', coordinates: [48.8954, 9.1918], type: 'train station' },
+  { name: 'Bietigheim-Bissingen', coordinates: [48.9625, 9.1295], type: 'train station' },
+  { name: 'Besigheim', coordinates: [49.0041, 9.1409], type: 'train station' },
+  { name: 'Neckarwestheim', coordinates: [49.0372, 9.1900], type: 'train station' },
+  { name: 'Lauffen am Neckar', coordinates: [49.0752, 9.1484], type: 'train station' },
+  { name: 'Heilbronn Hauptbahnhof', coordinates: [49.1439, 9.2260], type: 'train station' },
+  { name: 'Heilbronn Marktplatz', coordinates: [49.1424, 9.2187], type: 'train tram_stop' },
+  { name: 'Heilbronn Friedensplatz', coordinates: [49.1441, 9.2180], type: 'train tram_stop' },
+  { name: 'Neckarsulm', coordinates: [49.1914, 9.2278], type: 'train station' },
+  { name: 'Bad Wimpfen', coordinates: [49.2277, 9.1627], type: 'train halt' },
+  { name: 'Bad Friedrichshall Hauptbahnhof', coordinates: [49.2378, 9.2163], type: 'train station' },
+  { name: 'Bad Friedrichshall-Kochendorf', coordinates: [49.2289, 9.1906], type: 'train halt' },
+  { name: 'Weinsberg West', coordinates: [49.1449, 9.2770], type: 'train halt' },
+  { name: 'Weinsberg', coordinates: [49.1530, 9.2890], type: 'train halt' },
+
+  // ===== Heilbronn / Weinsberg / Bad Friedrichshall region (bus) =====
+  { name: 'Heilbronn Hauptbahnhof (Bus)', coordinates: [49.1427, 9.2258], type: 'bus station' },
+  { name: 'Heilbronn Theater (Bus)', coordinates: [49.1415, 9.2212], type: 'bus stop' },
+  { name: 'Weinsberg Marktplatz', coordinates: [49.1495, 9.2830], type: 'bus stop' },
+  { name: 'Bad Friedrichshall Marktplatz', coordinates: [49.2317, 9.2070], type: 'bus stop' },
+  { name: 'Neckarsulm Marktplatz', coordinates: [49.1900, 9.2290], type: 'bus stop' },
 ];
 
 module.exports = FALLBACK_STOPS;

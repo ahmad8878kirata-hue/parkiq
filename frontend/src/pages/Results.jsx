@@ -83,8 +83,7 @@ const MODE_META = {
     train: {
         icon: (<span className="mode-icon-stack mode-icon-stack-car-train"><Car weight="fill" size={14} color="#f43f5e" /><Train weight="fill" size={14} color="#f43f5e" /></span>),
         label: 'Auto + Bahn',
-        color: '#f43f5e',
-        recommended: true
+        color: '#f43f5e'
     }
 };
 
@@ -685,19 +684,25 @@ const Results = () => {
         </div>
     );
 
+    // The "Empfohlen" badge follows the routing result, not a fixed tab:
+    // a parking list marks the active mode as recommended, while a pure-ÖPNV
+    // fallback (directTransit) moves the badge to the transit tab.
+    const recommendedMode = isDirectTransit ? 'transit' : (routeOptions.length > 0 ? selectedMode : null);
+
     const renderModeTabs = () => (
         <div className="mode-tabs">
             {Object.entries(MODE_META).map(([mode, meta]) => {
                 const isActive = mode === activeMode;
+                const isRecommended = mode === recommendedMode;
                 return (
                     <button
                         key={mode}
-                        className={`mode-tab ${isActive ? 'active best-mode' : ''} ${meta.recommended ? 'recommended' : ''}`}
+                        className={`mode-tab ${isActive ? 'active best-mode' : ''} ${isRecommended ? 'recommended' : ''}`}
                         onClick={() => handleModeChange(mode)}
                     >
                         <span className="mode-tab-icon">{meta.icon}</span>
                         <span className="mode-tab-label">{meta.label}</span>
-                        {meta.recommended && <span className="recommended-badge">Empfohlen</span>}
+                        {isRecommended && <span className="recommended-badge">Empfohlen</span>}
                         {isActive && <span className="best-mode-check"><Check weight="bold" size={12} /></span>}
                     </button>
                 );
